@@ -21,6 +21,7 @@
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "shell/browser/bluetooth/electron_bluetooth_delegate.h"
 #include "shell/browser/serial/electron_serial_delegate.h"
+#include "shell/browser/hid/electron_hid_delegate.h" //+by xxlang@2021-07-06
 
 namespace content {
 class ClientCertificateDelegate;
@@ -87,6 +88,8 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
   void SetCanUseCustomSiteInstance(bool should_disable);
   bool CanUseCustomSiteInstance() override;
   content::SerialDelegate* GetSerialDelegate() override;
+
+  content::HidDelegate* GetHidDelegate() override; //+by xxlang@2021-07-06
 
   content::BluetoothDelegate* GetBluetoothDelegate() override;
 
@@ -345,6 +348,7 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
 
   std::unique_ptr<ElectronSerialDelegate> serial_delegate_;
   std::unique_ptr<ElectronBluetoothDelegate> bluetooth_delegate_;
+  std::unique_ptr<ElectronHidDelegate> hid_delegate_; //+by xxlang@2021-07-06
 
 #if defined(OS_MAC)
   ElectronBrowserMainParts* browser_main_parts_ = nullptr;
