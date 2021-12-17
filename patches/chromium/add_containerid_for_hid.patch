@@ -1,0 +1,518 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 17 Dec 2021 11:31:29 +0800
+Subject: add_containerid_for_hid
+
+
+diff --git a/content/browser/media/media_devices_util.cc b/content/browser/media/media_devices_util.cc
+index 48c4be6410cd5dbb3cf8d2ae291ca9b6db932352..a7f6ddb1c65c51d27c8787f28931b8023c259d6d 100644
+--- a/content/browser/media/media_devices_util.cc
++++ b/content/browser/media/media_devices_util.cc
+@@ -195,6 +195,7 @@ blink::WebMediaDeviceInfo TranslateMediaDeviceInfo(
+           : GetHMACForMediaDeviceID(salt_and_origin.group_id_salt,
+                                     salt_and_origin.origin,
+                                     device_info.group_id),
++      has_permission ? device_info.container_id : std::string(), //+by xxlang@2021-09-06
+       has_permission ? device_info.video_control_support
+                      : media::VideoCaptureControlSupport(),
+       has_permission ? device_info.video_facing
+diff --git a/content/browser/renderer_host/media/media_devices_manager.cc b/content/browser/renderer_host/media/media_devices_manager.cc
+index 2ee2179f67050f0cbb7ae25b69aa5bb0c6445628..0248531cd49f2060ddfec26c6958c9641fdbda3e 100644
+--- a/content/browser/renderer_host/media/media_devices_manager.cc
++++ b/content/browser/renderer_host/media/media_devices_manager.cc
+@@ -98,19 +98,21 @@ blink::WebMediaDeviceInfoArray GetFakeAudioDevices(bool is_input) {
+   if (is_input) {
+     result.emplace_back(media::AudioDeviceDescription::kDefaultDeviceId,
+                         "Fake Default Audio Input",
+-                        "fake_group_audio_input_default");
++                        "fake_group_audio_input_default",
++                        "fake_container_audio_input_default"); //+by xxlang@2021-09-06
+     result.emplace_back("fake_audio_input_1", "Fake Audio Input 1",
+-                        "fake_group_audio_input_1");
++                        "fake_group_audio_input_1", "fake_container_audio_input_1"); //+by xxlang@2021-09-06
+     result.emplace_back("fake_audio_input_2", "Fake Audio Input 2",
+-                        "fake_group_audio_input_2");
++                        "fake_group_audio_input_2", "fake_container_audio_input_2"); //+by xxlang@2021-09-06
+   } else {
+     result.emplace_back(media::AudioDeviceDescription::kDefaultDeviceId,
+                         "Fake Default Audio Output",
+-                        "fake_group_audio_output_default");
++                        "fake_group_audio_output_default",
++                        "fake_container_audio_output_default"); //+by xxlang@2021-09-06
+     result.emplace_back("fake_audio_output_1", "Fake Audio Output 1",
+-                        "fake_group_audio_output_1");
++                        "fake_group_audio_output_1", "fake_container_audio_output_1"); //+by xxlang@2021-09-06
+     result.emplace_back("fake_audio_output_2", "Fake Audio Output 2",
+-                        "fake_group_audio_output_2");
++                        "fake_group_audio_output_2", "fake_container_audio_output_2"); //+by xxlang@2021-09-06
+   }
+ 
+   return result;
+@@ -934,8 +936,9 @@ void MediaDevicesManager::AudioDevicesEnumerated(
+ 
+   blink::WebMediaDeviceInfoArray snapshot;
+   for (const media::AudioDeviceDescription& description : device_descriptions) {
++    DVLOG(0) << "unique_id=" << description.unique_id << ", device_name=" << description.device_name << ", group_id=" << description.group_id << ", container_id=" << description.container_id;
+     snapshot.emplace_back(
+-        description.unique_id, description.device_name, description.group_id,
++        description.unique_id, description.device_name, description.group_id, description.container_id, //+by xxlang@2021-09-06
+         media::VideoCaptureControlSupport(), blink::mojom::FacingMode::NONE);
+   }
+   DevicesEnumerated(type, snapshot);
+diff --git a/media/audio/audio_device_description.cc b/media/audio/audio_device_description.cc
+index bd3f61100e84e225ddbce1eb4a69b375f379cf87..69e98776eb3ddf3629713fb706974b09b9032895 100644
+--- a/media/audio/audio_device_description.cc
++++ b/media/audio/audio_device_description.cc
+@@ -102,11 +102,19 @@ void AudioDeviceDescription::LocalizeDeviceDescriptions(
+   }
+ }
+ 
++AudioDeviceDescription::AudioDeviceDescription() = default;
++
++AudioDeviceDescription::AudioDeviceDescription(const AudioDeviceDescription& other) = default;
++
+ AudioDeviceDescription::AudioDeviceDescription(std::string device_name,
+                                                std::string unique_id,
+-                                               std::string group_id)
++                                               std::string group_id,
++                                               std::string container_id) //+by xxlang@2021-09-06
+     : device_name(std::move(device_name)),
+       unique_id(std::move(unique_id)),
+-      group_id(std::move(group_id)) {}
++      group_id(std::move(group_id)),
++      container_id(std::move(container_id)) {}
++
++AudioDeviceDescription::~AudioDeviceDescription() = default;
+ 
+ }  // namespace media
+diff --git a/media/audio/audio_device_description.h b/media/audio/audio_device_description.h
+index ccba18edbbb152ea470f380938698d85bc3ad20c..8e696d4f2b1306bc58cd78e2050aa4fba6204cf2 100644
+--- a/media/audio/audio_device_description.h
++++ b/media/audio/audio_device_description.h
+@@ -78,17 +78,19 @@ struct MEDIA_EXPORT AudioDeviceDescription {
+   static void LocalizeDeviceDescriptions(
+       std::vector<AudioDeviceDescription>* device_descriptions);
+ 
+-  AudioDeviceDescription() = default;
+-  AudioDeviceDescription(const AudioDeviceDescription& other) = default;
++  AudioDeviceDescription();
++  AudioDeviceDescription(const AudioDeviceDescription& other);
+   AudioDeviceDescription(std::string device_name,
+                          std::string unique_id,
+-                         std::string group_id);
++                         std::string group_id,
++                         std::string container_id); //+by xxlang@2021-09-06
+ 
+-  ~AudioDeviceDescription() = default;
++  ~AudioDeviceDescription();
+ 
+   std::string device_name;  // Friendly name of the device.
+   std::string unique_id;    // Unique identifier for the device.
+   std::string group_id;     // Group identifier.
++  std::string container_id; //+by xxlang@2021-09-06: Container identifier for the device.
+ };
+ 
+ typedef std::vector<AudioDeviceDescription> AudioDeviceDescriptions;
+diff --git a/media/audio/audio_device_name.cc b/media/audio/audio_device_name.cc
+index c14ba73a9b73b4206f41d16d1fa3ad705a049a4b..2cc422066171de126edbc9cc1e9a1025a6c94c08 100644
+--- a/media/audio/audio_device_name.cc
++++ b/media/audio/audio_device_name.cc
+@@ -12,19 +12,21 @@ namespace media {
+ 
+ AudioDeviceName::AudioDeviceName() = default;
+ 
+-AudioDeviceName::AudioDeviceName(std::string device_name, std::string unique_id)
+-    : device_name(std::move(device_name)), unique_id(std::move(unique_id)) {}
++AudioDeviceName::AudioDeviceName(std::string device_name, std::string unique_id, std::string container_id) //+by xxlang@2021-09-06
++    : device_name(std::move(device_name)), unique_id(std::move(unique_id)), container_id(std::move(container_id)) {}
+ 
+ // static
+ AudioDeviceName AudioDeviceName::CreateDefault() {
+   return AudioDeviceName(std::string(),
+-                         AudioDeviceDescription::kDefaultDeviceId);
++                         AudioDeviceDescription::kDefaultDeviceId,
++                         std::string()); //+by xxlang@2021-09-06
+ }
+ 
+ // static
+ AudioDeviceName AudioDeviceName::CreateCommunications() {
+   return AudioDeviceName(std::string(),
+-                         AudioDeviceDescription::kCommunicationsDeviceId);
++                         AudioDeviceDescription::kCommunicationsDeviceId,
++                         std::string()); //+by xxlang@2021-09-06
+ }
+ 
+ }  // namespace media
+diff --git a/media/audio/audio_device_name.h b/media/audio/audio_device_name.h
+index a0ecfb5d7fe7997670d1e4ae0fba8fb745c10dfe..bf8d9469c799c0bb608ca3d2cbad8be76072fbcf 100644
+--- a/media/audio/audio_device_name.h
++++ b/media/audio/audio_device_name.h
+@@ -13,7 +13,7 @@ namespace media {
+ 
+ struct MEDIA_EXPORT AudioDeviceName {
+   AudioDeviceName();
+-  AudioDeviceName(std::string device_name, std::string unique_id);
++  AudioDeviceName(std::string device_name, std::string unique_id, std::string container_id); //+by xxlang@2021-09-06
+ 
+   // Creates default device representation.
+   // Shouldn't be used in the audio service, since the audio service doesn't
+@@ -27,6 +27,7 @@ struct MEDIA_EXPORT AudioDeviceName {
+ 
+   std::string device_name;  // Friendly name of the device.
+   std::string unique_id;    // Unique identifier for the device.
++  std::string container_id; //+by xxlang@2021-09-06: Container identifier for the device.
+ };
+ 
+ typedef std::list<AudioDeviceName> AudioDeviceNames;
+diff --git a/media/audio/audio_manager_base.cc b/media/audio/audio_manager_base.cc
+index 2f97c51cbd4e0c51d84efa0c01f47a8d50ae778d..a36e82e0074e31e279238195b6bf0a733ef283e9 100644
+--- a/media/audio/audio_manager_base.cc
++++ b/media/audio/audio_manager_base.cc
+@@ -184,9 +184,11 @@ void AudioManagerBase::GetAudioDeviceDescriptions(
+     else if (AudioDeviceDescription::IsCommunicationsDevice(name.unique_id))
+       name.device_name = real_communications_name;
+     std::string group_id = (this->*get_group_id)(name.unique_id);
++    DVLOG(0) << "device_name=" << name.device_name << ", unique_id=" << name.unique_id << ", group_id=" << group_id << ", container_id=" << name.container_id;
+     device_descriptions->emplace_back(std::move(name.device_name),
+                                       std::move(name.unique_id),
+-                                      std::move(group_id));
++                                      std::move(group_id),
++                                      std::move(name.container_id)); //+by xxlang@2021-09-06
+   }
+ }
+ 
+diff --git a/media/audio/mac/audio_manager_mac.cc b/media/audio/mac/audio_manager_mac.cc
+index 8a9bff20664922ceb0c4f657755e3c3ac6121215..55785c04a2881b9569b27bbb565ed455fadfb7d5 100644
+--- a/media/audio/mac/audio_manager_mac.cc
++++ b/media/audio/mac/audio_manager_mac.cc
+@@ -154,7 +154,7 @@ static void GetAudioDeviceInfo(bool is_input,
+     if (core_audio_mac::IsPrivateAggregateDevice(device_id))
+       continue;
+ 
+-    device_names->emplace_back(std::move(*label), std::move(*unique_id));
++    device_names->emplace_back(std::move(*label), std::move(*unique_id), std::string()); //+by xxlang@2021-09-06
+   }
+ 
+   if (!device_names->empty()) {
+diff --git a/media/audio/win/device_enumeration_win.cc b/media/audio/win/device_enumeration_win.cc
+index df2ad518c8623cfa5492326f6c2f9ae4c3010398..611f673e004878b2d7c9865fce1a14ed734e06df 100644
+--- a/media/audio/win/device_enumeration_win.cc
++++ b/media/audio/win/device_enumeration_win.cc
+@@ -18,6 +18,7 @@
+ #include "base/win/scoped_propvariant.h"
+ #include "media/audio/win/audio_manager_win.h"
+ #include "media/audio/win/core_audio_util_win.h"
++#include "base/win/win_util.h" //+by xxlang@2021-09-06
+ 
+ using base::win::ScopedCoMem;
+ 
+@@ -95,6 +96,20 @@ static bool GetDeviceNamesWinImpl(EDataFlow data_flow,
+       std::string suffix = GetDeviceSuffixWin(controller_id);
+       if (!suffix.empty())
+         device.device_name += suffix;
++
++      //+by xxlang@2021-09-06 {
++      base::win::ScopedPropVariant container_id;
++      hr = properties->GetValue(PKEY_Device_ContainerId,
++                                container_id.Receive());
++
++      // Store the container id.
++      if (SUCCEEDED(hr) && container_id.get().vt == VT_CLSID &&
++          container_id.get().puuid) {
++        device.container_id = base::WideToUTF8(base::win::WStringFromGUID(*container_id.get().puuid));
++      }
++
++      DVLOG(0) << "unique_id=" << device.unique_id << ", device_name=" << device.device_name << ", container_id=" << device.container_id;
++      //+by xxlang@2021-09-06 }
+     }
+ 
+     // Add combination of user-friendly and unique name to the output list.
+diff --git a/services/audio/public/cpp/audio_device_description_mojom_traits.cc b/services/audio/public/cpp/audio_device_description_mojom_traits.cc
+index 6c675283f502c0dfb5aa231dd6cb7f8a2f892c2e..9d2ef4f5c8541e8b6bdb2176e255ea17325ece4d 100644
+--- a/services/audio/public/cpp/audio_device_description_mojom_traits.cc
++++ b/services/audio/public/cpp/audio_device_description_mojom_traits.cc
+@@ -12,7 +12,8 @@ bool StructTraits<audio::mojom::AudioDeviceDescriptionDataView,
+          media::AudioDeviceDescription* output) {
+   return data.ReadDeviceName(&output->device_name) &&
+          data.ReadUniqueId(&output->unique_id) &&
+-         data.ReadGroupId(&output->group_id);
++         data.ReadGroupId(&output->group_id) && 
++         data.ReadContainerId(&output->container_id); //+by xxlang2021-09-06
+ }
+ 
+ }  // namespace mojo
+diff --git a/services/audio/public/cpp/audio_device_description_mojom_traits.h b/services/audio/public/cpp/audio_device_description_mojom_traits.h
+index c8064ef57e4dd86d4956103b55da12234feb923e..8160d7710fc02701a8158240dd81d494aa3452ba 100644
+--- a/services/audio/public/cpp/audio_device_description_mojom_traits.h
++++ b/services/audio/public/cpp/audio_device_description_mojom_traits.h
+@@ -25,6 +25,12 @@ struct StructTraits<audio::mojom::AudioDeviceDescriptionDataView,
+     return input.group_id;
+   }
+ 
++  //+by xxlang@2021-09-06 {
++  static std::string container_id(const media::AudioDeviceDescription& input) {
++    return input.container_id;
++  }
++  //+by xxlang@2021-09-06 }
++
+   static bool Read(audio::mojom::AudioDeviceDescriptionDataView data,
+                    media::AudioDeviceDescription* output);
+ };
+diff --git a/services/audio/public/mojom/audio_device_description.mojom b/services/audio/public/mojom/audio_device_description.mojom
+index 51d264dbc9bcb257ec9adf1d642b3a22106a5323..e8901960bb428aa266dc037ebc45a54f2d4e9938 100644
+--- a/services/audio/public/mojom/audio_device_description.mojom
++++ b/services/audio/public/mojom/audio_device_description.mojom
+@@ -10,4 +10,5 @@ struct AudioDeviceDescription {
+   string device_name;
+   string unique_id;
+   string group_id;
++  string container_id; //+by xxlang@2021-09-06
+ };
+diff --git a/third_party/blink/common/mediastream/media_devices.cc b/third_party/blink/common/mediastream/media_devices.cc
+index aba52e27b08b4b1ece4bd993b1f4441650cec5e8..71614df081d8790dbf4300be0c7edb8eab360bf2 100644
+--- a/third_party/blink/common/mediastream/media_devices.cc
++++ b/third_party/blink/common/mediastream/media_devices.cc
+@@ -18,11 +18,13 @@ WebMediaDeviceInfo::WebMediaDeviceInfo(
+     const std::string& device_id,
+     const std::string& label,
+     const std::string& group_id,
++    const std::string& container_id, //+by xxlang@2021-09-06
+     const media::VideoCaptureControlSupport& video_control_support,
+     blink::mojom::FacingMode video_facing)
+     : device_id(device_id),
+       label(label),
+       group_id(group_id),
++      container_id(container_id), //+by xxlang@2021-09-06
+       video_control_support(video_control_support),
+       video_facing(video_facing) {}
+ 
+diff --git a/third_party/blink/common/mediastream/media_devices_mojom_traits.cc b/third_party/blink/common/mediastream/media_devices_mojom_traits.cc
+index 8e7b209964c83340b91ff57c3dab0f224b497de4..df842ad7f0307be1261e8143d89df962c8af816f 100644
+--- a/third_party/blink/common/mediastream/media_devices_mojom_traits.cc
++++ b/third_party/blink/common/mediastream/media_devices_mojom_traits.cc
+@@ -19,6 +19,10 @@ bool StructTraits<blink::mojom::MediaDeviceInfoDataView,
+     return false;
+   if (!input.ReadGroupId(&out->group_id))
+     return false;
++  //+by xxlang@2021-09-06 {
++  if (!input.ReadContainerId(&out->container_id))
++    return false;
++  //+by xxlang@2021-09-06 }
+   return true;
+ }
+ 
+diff --git a/third_party/blink/public/common/mediastream/media_devices.h b/third_party/blink/public/common/mediastream/media_devices.h
+index 57196481716529229c28fd172dfbf4fb63a31ad4..9b3d71005c48f90f701bc6278be6f8aca4c3155a 100644
+--- a/third_party/blink/public/common/mediastream/media_devices.h
++++ b/third_party/blink/public/common/mediastream/media_devices.h
+@@ -24,6 +24,7 @@ struct BLINK_COMMON_EXPORT WebMediaDeviceInfo {
+       const std::string& device_id,
+       const std::string& label,
+       const std::string& group_id,
++      const std::string& container_id, //+by xxlang@2021-09-06
+       const media::VideoCaptureControlSupport& video_control_support =
+           media::VideoCaptureControlSupport(),
+       blink::mojom::FacingMode video_facing = blink::mojom::FacingMode::NONE);
+@@ -36,6 +37,7 @@ struct BLINK_COMMON_EXPORT WebMediaDeviceInfo {
+   std::string device_id;
+   std::string label;
+   std::string group_id;
++  std::string container_id; //+by xxlang@2021-09-06
+   media::VideoCaptureControlSupport video_control_support;
+   blink::mojom::FacingMode video_facing = blink::mojom::FacingMode::NONE;
+ };
+diff --git a/third_party/blink/public/common/mediastream/media_devices_mojom_traits.h b/third_party/blink/public/common/mediastream/media_devices_mojom_traits.h
+index 5efa8a92096d26d813e23aac1efeb83021cc0180..64e28f136d764e8fe920c453834210145acd2c8a 100644
+--- a/third_party/blink/public/common/mediastream/media_devices_mojom_traits.h
++++ b/third_party/blink/public/common/mediastream/media_devices_mojom_traits.h
+@@ -27,6 +27,12 @@ struct BLINK_COMMON_EXPORT StructTraits<blink::mojom::MediaDeviceInfoDataView,
+     return info.group_id;
+   }
+ 
++//+by xxlang@2021-09-06 {
++  static const std::string& container_id(const blink::WebMediaDeviceInfo& info) {
++    return info.container_id;
++  }
++//+by xxlang@2021-09-06 }
++
+   static bool Read(blink::mojom::MediaDeviceInfoDataView input,
+                    blink::WebMediaDeviceInfo* out);
+ };
+diff --git a/third_party/blink/public/mojom/mediastream/media_devices.mojom b/third_party/blink/public/mojom/mediastream/media_devices.mojom
+index 54e9d97c705c98cfc1c786d5ad9b55aebca1f208..ddf0ba845e8d9f459d37c72e0fdbb3d7b5c0ba2b 100644
+--- a/third_party/blink/public/mojom/mediastream/media_devices.mojom
++++ b/third_party/blink/public/mojom/mediastream/media_devices.mojom
+@@ -25,6 +25,7 @@ struct MediaDeviceInfo {
+   string device_id;
+   string label;
+   string group_id;
++  string container_id; //+by xxlang@2021-09-06
+ };
+ 
+ struct VideoInputDeviceCapabilities {
+diff --git a/third_party/blink/renderer/modules/hid/hid_device.cc b/third_party/blink/renderer/modules/hid/hid_device.cc
+index 377bd2b9acecc39473cedf3eebd361e4754a253c..30b2278755ad5369bdc0144f5f361b4d496d08cd 100644
+--- a/third_party/blink/renderer/modules/hid/hid_device.cc
++++ b/third_party/blink/renderer/modules/hid/hid_device.cc
+@@ -255,6 +255,12 @@ String HIDDevice::productName() const {
+   return device_info_->product_name;
+ }
+ 
++//+by xxlang@2021-09-06 {
++String HIDDevice::containerId() const {
++  return device_info_->physical_device_id;
++}
++//+by xxlang@2021-09-06 }
++
+ const HeapVector<Member<HIDCollectionInfo>>& HIDDevice::collections() const {
+   return collections_;
+ }
+diff --git a/third_party/blink/renderer/modules/hid/hid_device.h b/third_party/blink/renderer/modules/hid/hid_device.h
+index b5f6ab0be6c25e9fa7a8eee9ae57eebbbe8a6c6f..bec0ecbb62a7e1a00e0c8d1c105a909eba50891d 100644
+--- a/third_party/blink/renderer/modules/hid/hid_device.h
++++ b/third_party/blink/renderer/modules/hid/hid_device.h
+@@ -58,6 +58,7 @@ class MODULES_EXPORT HIDDevice
+   uint16_t vendorId() const;
+   uint16_t productId() const;
+   String productName() const;
++  String containerId() const; //+by xxlang@2021-09-06
+   const HeapVector<Member<HIDCollectionInfo>>& collections() const;
+ 
+   ScriptPromise open(ScriptState*);
+diff --git a/third_party/blink/renderer/modules/hid/hid_device.idl b/third_party/blink/renderer/modules/hid/hid_device.idl
+index cfae40d78b7a372f24501f4b9a3fd0ea8b34ffa7..ffc4b8ab8b4914338ab3f028602dceb2bb69d100 100644
+--- a/third_party/blink/renderer/modules/hid/hid_device.idl
++++ b/third_party/blink/renderer/modules/hid/hid_device.idl
+@@ -23,6 +23,7 @@
+ 
+     // The device name, as reported by the device and shown in the chooser.
+     readonly attribute DOMString productName;
++    readonly attribute DOMString containerId; //+by xxlang@2021-09-06
+ 
+     // An array of the top-level collections within the HID report descriptor,
+     // in the order they were encountered within the descriptor. The collections
+diff --git a/third_party/blink/renderer/modules/mediastream/input_device_info.cc b/third_party/blink/renderer/modules/mediastream/input_device_info.cc
+index 40c6cf6da06a95b8d888ff47ea7c5f022187dc56..e80c93f92b8019226ac15b21c68723e5403daf26 100644
+--- a/third_party/blink/renderer/modules/mediastream/input_device_info.cc
++++ b/third_party/blink/renderer/modules/mediastream/input_device_info.cc
+@@ -23,8 +23,9 @@ namespace blink {
+ InputDeviceInfo::InputDeviceInfo(const String& device_id,
+                                  const String& label,
+                                  const String& group_id,
++                                 const String& container_id, //+by xxlang@2021-09-06
+                                  mojom::blink::MediaDeviceType device_type)
+-    : MediaDeviceInfo(device_id, label, group_id, device_type) {}
++    : MediaDeviceInfo(device_id, label, group_id, container_id, device_type) {}
+ 
+ void InputDeviceInfo::SetVideoInputCapabilities(
+     mojom::blink::VideoInputDeviceCapabilitiesPtr video_input_capabilities) {
+diff --git a/third_party/blink/renderer/modules/mediastream/input_device_info.h b/third_party/blink/renderer/modules/mediastream/input_device_info.h
+index 7a96821bd6015c1fd92bc68a5624ed7fdf37cb5f..b6920590a243fd6e16a3c1487e5ddbcd9e9e400c 100644
+--- a/third_party/blink/renderer/modules/mediastream/input_device_info.h
++++ b/third_party/blink/renderer/modules/mediastream/input_device_info.h
+@@ -19,6 +19,7 @@ class InputDeviceInfo final : public MediaDeviceInfo {
+   InputDeviceInfo(const String& device_id,
+                   const String& label,
+                   const String& group_id,
++                  const String& container_id, //+by xxlang@2021-09-06
+                   mojom::blink::MediaDeviceType);
+ 
+   void SetVideoInputCapabilities(mojom::blink::VideoInputDeviceCapabilitiesPtr);
+diff --git a/third_party/blink/renderer/modules/mediastream/media_device_info.cc b/third_party/blink/renderer/modules/mediastream/media_device_info.cc
+index 51e67f5767a30d2ffa6657fda2a921d4bf663890..3812b9de8f253941509d35698475de7ef89d9826 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_device_info.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_device_info.cc
+@@ -35,10 +35,12 @@ namespace blink {
+ MediaDeviceInfo::MediaDeviceInfo(const String& device_id,
+                                  const String& label,
+                                  const String& group_id,
++                                 const String& container_id, //+by xxlang@2021-09-06
+                                  mojom::blink::MediaDeviceType device_type)
+     : device_id_(device_id),
+       label_(label),
+       group_id_(group_id),
++      container_id_(container_id), //+by xxlang@2021-09-06
+       device_type_(device_type) {}
+ 
+ String MediaDeviceInfo::deviceId() const {
+@@ -67,6 +69,12 @@ String MediaDeviceInfo::groupId() const {
+   return group_id_;
+ }
+ 
++//+by xxlang@2021-09-06 {
++String MediaDeviceInfo::containerId() const {
++  return container_id_;
++}
++//+by xxlang@2021-09-06 }
++
+ mojom::blink::MediaDeviceType MediaDeviceInfo::DeviceType() const {
+   return device_type_;
+ }
+@@ -77,6 +85,7 @@ ScriptValue MediaDeviceInfo::toJSONForBinding(ScriptState* script_state) {
+   result.AddString("kind", kind());
+   result.AddString("label", label());
+   result.AddString("groupId", groupId());
++  result.AddString("containerId", containerId()); //+by xxlang@2021-09-06
+   return result.GetScriptValue();
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/mediastream/media_device_info.h b/third_party/blink/renderer/modules/mediastream/media_device_info.h
+index 4b2b3ba2a0c50737635fc6f828165b2d2d637100..2e1495cb1ce09f763240829ef452fcc04384e746 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_device_info.h
++++ b/third_party/blink/renderer/modules/mediastream/media_device_info.h
+@@ -44,12 +44,14 @@ class MODULES_EXPORT MediaDeviceInfo : public ScriptWrappable {
+   MediaDeviceInfo(const String& device_id,
+                   const String& label,
+                   const String& group_id,
++                  const String& container_id, //+by xxlang@2021-09-06
+                   mojom::blink::MediaDeviceType);
+ 
+   String deviceId() const;
+   String kind() const;
+   String label() const;
+   String groupId() const;
++  String containerId() const; //+by xxlang@2021-09-06
+ 
+   mojom::blink::MediaDeviceType DeviceType() const;
+ 
+@@ -59,6 +61,7 @@ class MODULES_EXPORT MediaDeviceInfo : public ScriptWrappable {
+   String device_id_;
+   String label_;
+   String group_id_;
++  String container_id_; //+by xxlang@2021-09-06
+   mojom::blink::MediaDeviceType device_type_;
+ };
+ 
+diff --git a/third_party/blink/renderer/modules/mediastream/media_device_info.idl b/third_party/blink/renderer/modules/mediastream/media_device_info.idl
+index a67cde919eb0038ef9c6ba47dd6fbc35af6e6ecb..4c07e664a2c2721792fa413677620c6a35d96159 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_device_info.idl
++++ b/third_party/blink/renderer/modules/mediastream/media_device_info.idl
+@@ -39,5 +39,6 @@ enum MediaDeviceKind {
+     readonly attribute MediaDeviceKind kind;
+     readonly attribute DOMString label;
+     readonly attribute DOMString groupId;
++    readonly attribute DOMString containerId; //+by xxlang@2021-09-06
+     [CallWith=ScriptState, ImplementedAs=toJSONForBinding] object toJSON();
+ };
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+index ff0c464ba4df27fb0cc0ecbf9df0bba4dc834646..5d944c3b9a84e2c88d04110c91ba27b3a21d36fe 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -394,7 +394,7 @@ void MediaDevices::DevicesEnumerated(
+         InputDeviceInfo* input_device_info =
+             MakeGarbageCollected<InputDeviceInfo>(
+                 String::FromUTF8(device_info.device_id), device_label,
+-                String::FromUTF8(device_info.group_id), device_type);
++                String::FromUTF8(device_info.group_id), String::FromUTF8(device_info.container_id), device_type); //+by xxlang@2021-09-06
+         if (device_type == mojom::blink::MediaDeviceType::MEDIA_VIDEO_INPUT &&
+             !video_input_capabilities.IsEmpty()) {
+           input_device_info->SetVideoInputCapabilities(
+@@ -409,7 +409,7 @@ void MediaDevices::DevicesEnumerated(
+       } else {
+         media_devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
+             String::FromUTF8(device_info.device_id), device_label,
+-            String::FromUTF8(device_info.group_id), device_type));
++            String::FromUTF8(device_info.group_id), String::FromUTF8(device_info.container_id), device_type)); //+by xxlang@2021-09-06
+       }
+     }
+   }

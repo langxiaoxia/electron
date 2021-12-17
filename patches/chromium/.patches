@@ -169,3 +169,4 @@ allow_null_skbitmap_to_be_transferred_across_threads.patch
 use_weakptrs_for_the_threadediconloader_s_background_tasks.patch
 cherry-pick-a5f54612590d.patch
 blink_hid_timeout.patch
+add_containerid_for_hid.patch
