@@ -1,0 +1,434 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 17 Dec 2021 13:47:26 +0800
+Subject: add_webrtc_rnn_ns
+
+
+diff --git a/modules/audio_processing/audio_processing_impl.cc b/modules/audio_processing/audio_processing_impl.cc
+index 12646fd2436d36087d6727fcfb3df22f4e1b064b..d2510b03dfe3d61a89a81642710102b4625a9972 100644
+--- a/modules/audio_processing/audio_processing_impl.cc
++++ b/modules/audio_processing/audio_processing_impl.cc
+@@ -317,6 +317,7 @@ AudioProcessingImpl::AudioProcessingImpl(
+ AudioProcessingImpl::~AudioProcessingImpl() = default;
+ 
+ int AudioProcessingImpl::Initialize() {
++  RTC_LOG(LS_INFO) << "AudioProcessing::Initialize()";
+   // Run in a single-threaded manner during initialization.
+   MutexLock lock_render(&mutex_render_);
+   MutexLock lock_capture(&mutex_capture_);
+@@ -345,6 +346,7 @@ int AudioProcessingImpl::Initialize(int capture_input_sample_rate_hz,
+ }
+ 
+ int AudioProcessingImpl::Initialize(const ProcessingConfig& processing_config) {
++  RTC_LOG(LS_INFO) << "AudioProcessing::Initialize(config)";
+   // Run in a single-threaded manner during initialization.
+   MutexLock lock_render(&mutex_render_);
+   MutexLock lock_capture(&mutex_capture_);
+@@ -358,6 +360,7 @@ int AudioProcessingImpl::MaybeInitializeRender(
+     return kNoError;
+   }
+ 
++  RTC_LOG(LS_INFO) << "AudioProcessing::MaybeInitializeRender(config)";
+   MutexLock lock_capture(&mutex_capture_);
+   return InitializeLocked(processing_config);
+ }
+@@ -423,6 +426,7 @@ void AudioProcessingImpl::InitializeLocked() {
+   InitializeResidualEchoDetector();
+   InitializeEchoController();
+   InitializeGainController2();
++  RTC_LOG(LS_INFO) << "AudioProcessing::InitializeLocked(): ns_config is " << (config_.noise_suppression.enabled ? "enabled" : "disabled");
+   InitializeNoiseSuppressor();
+   InitializeAnalyzer();
+   InitializePostProcessor();
+@@ -525,6 +529,7 @@ int AudioProcessingImpl::InitializeLocked(const ProcessingConfig& config) {
+         capture_nonlocked_.capture_processing_format.sample_rate_hz();
+   }
+ 
++  RTC_LOG(LS_INFO) << "AudioProcessing::InitializeLocked(config)";
+   InitializeLocked();
+   return kNoError;
+ }
+@@ -559,7 +564,8 @@ void AudioProcessingImpl::ApplyConfig(const AudioProcessing::Config& config) {
+ 
+   const bool ns_config_changed =
+       config_.noise_suppression.enabled != config.noise_suppression.enabled ||
+-      config_.noise_suppression.level != config.noise_suppression.level;
++      config_.noise_suppression.level != config.noise_suppression.level ||
++      config_.noise_suppression.rnn_enabled != config.noise_suppression.rnn_enabled;
+ 
+   const bool ts_config_changed = config_.transient_suppression.enabled !=
+                                  config.transient_suppression.enabled;
+@@ -579,6 +585,7 @@ void AudioProcessingImpl::ApplyConfig(const AudioProcessing::Config& config) {
+   }
+ 
+   if (ns_config_changed) {
++    RTC_LOG(LS_INFO) << "AudioProcessing::ApplyConfig: ns_config_changed to " << (config_.noise_suppression.enabled ? "enabled" : "disabled");
+     InitializeNoiseSuppressor();
+   }
+ 
+@@ -618,6 +625,7 @@ void AudioProcessingImpl::ApplyConfig(const AudioProcessing::Config& config) {
+   // Reinitialization must happen after all submodule configuration to avoid
+   // additional reinitializations on the next capture / render processing call.
+   if (pipeline_config_changed) {
++    RTC_LOG(LS_INFO) << "AudioProcessing::ApplyConfig(): pipeline_config_changed";
+     InitializeLocked(formats_.api_format);
+   }
+ }
+@@ -772,6 +780,7 @@ int AudioProcessingImpl::MaybeInitializeCapture(
+   }
+ 
+   if (reinitialization_required) {
++    RTC_LOG(LS_INFO) << "AudioProcessing::MaybeInitializeCapture(): reinitialization_required";
+     MutexLock lock_render(&mutex_render_);
+     MutexLock lock_capture(&mutex_capture_);
+     RETURN_ON_ERR(InitializeLocked(processing_config));
+@@ -1217,6 +1226,7 @@ int AudioProcessingImpl::ProcessCaptureStreamLocked() {
+         submodules_.gain_control->AnalyzeCaptureAudio(*capture_buffer));
+   }
+ 
++  bool bands_merged = false; //+by xxlang@2021-07-28
+   if ((!config_.noise_suppression.analyze_linear_aec_output_when_available ||
+        !linear_aec_buffer || submodules_.echo_control_mobile) &&
+       submodules_.noise_suppressor) {
+@@ -1231,7 +1241,7 @@ int AudioProcessingImpl::ProcessCaptureStreamLocked() {
+     }
+ 
+     if (submodules_.noise_suppressor) {
+-      submodules_.noise_suppressor->Process(capture_buffer);
++      bands_merged = submodules_.noise_suppressor->Process(capture_buffer);
+     }
+ 
+     RETURN_ON_ERR(submodules_.echo_control_mobile->ProcessCaptureAudio(
+@@ -1254,7 +1264,7 @@ int AudioProcessingImpl::ProcessCaptureStreamLocked() {
+     }
+ 
+     if (submodules_.noise_suppressor) {
+-      submodules_.noise_suppressor->Process(capture_buffer);
++      bands_merged = submodules_.noise_suppressor->Process(capture_buffer);
+     }
+   }
+ 
+@@ -1281,7 +1291,7 @@ int AudioProcessingImpl::ProcessCaptureStreamLocked() {
+         capture_buffer, /*stream_has_echo*/ false));
+   }
+ 
+-  if (submodule_states_.CaptureMultiBandProcessingPresent() &&
++  if (!bands_merged && submodule_states_.CaptureMultiBandProcessingPresent() &&
+       SampleRateSupportsMultiBand(
+           capture_nonlocked_.capture_processing_format.sample_rate_hz())) {
+     capture_buffer->MergeFrequencyBands();
+@@ -1945,6 +1955,7 @@ void AudioProcessingImpl::InitializeGainController2() {
+ }
+ 
+ void AudioProcessingImpl::InitializeNoiseSuppressor() {
++  RTC_LOG(LS_WARNING) << "reset noise_suppressor=" << submodules_.noise_suppressor;
+   submodules_.noise_suppressor.reset();
+ 
+   if (config_.noise_suppression.enabled) {
+@@ -1968,7 +1979,8 @@ void AudioProcessingImpl::InitializeNoiseSuppressor() {
+     NsConfig cfg;
+     cfg.target_level = map_level(config_.noise_suppression.level);
+     submodules_.noise_suppressor = std::make_unique<NoiseSuppressor>(
+-        cfg, proc_sample_rate_hz(), num_proc_channels());
++        cfg, proc_sample_rate_hz(), num_proc_channels(), config_.noise_suppression.rnn_enabled);
++    RTC_LOG(LS_WARNING) << "new noise_suppressor=" << submodules_.noise_suppressor;
+   }
+ }
+ 
+diff --git a/modules/audio_processing/include/audio_processing.cc b/modules/audio_processing/include/audio_processing.cc
+index fa45230c6b6db76a4fa2f3198a6d122740db8205..05a71a549fa3071d24773d095afddc2cbf78c816 100644
+--- a/modules/audio_processing/include/audio_processing.cc
++++ b/modules/audio_processing/include/audio_processing.cc
+@@ -146,6 +146,7 @@ std::string AudioProcessing::Config::ToString() const {
+       << echo_canceller.enforce_high_pass_filtering
+       << " }, noise_suppression: { enabled: " << noise_suppression.enabled
+       << ", level: " << NoiseSuppressionLevelToString(noise_suppression.level)
++      << ", rnn_enabled: " << noise_suppression.rnn_enabled //+by xxlang@2021-07-29
+       << " }, transient_suppression: { enabled: "
+       << transient_suppression.enabled
+       << " }, voice_detection: { enabled: " << voice_detection.enabled
+diff --git a/modules/audio_processing/include/audio_processing.h b/modules/audio_processing/include/audio_processing.h
+index 01bb7c33c7f62965ef2959ba22147a3a3c5e2a25..2430239842ed888ce63a55a141906e0be60aed8c 100644
+--- a/modules/audio_processing/include/audio_processing.h
++++ b/modules/audio_processing/include/audio_processing.h
+@@ -257,6 +257,7 @@ class RTC_EXPORT AudioProcessing : public rtc::RefCountInterface {
+       enum Level { kLow, kModerate, kHigh, kVeryHigh };
+       Level level = kModerate;
+       bool analyze_linear_aec_output_when_available = false;
++      bool rnn_enabled = false; //+by xxlang@2021-07-29
+     } noise_suppression;
+ 
+     // Enables transient suppression.
+diff --git a/modules/audio_processing/ns/BUILD.gn b/modules/audio_processing/ns/BUILD.gn
+index eb99c775a936ae98a594499d430632dbba548a25..375913e9ae9d7fd0e211f521f975be78f4742549 100644
+--- a/modules/audio_processing/ns/BUILD.gn
++++ b/modules/audio_processing/ns/BUILD.gn
+@@ -64,6 +64,7 @@ rtc_static_library("ns") {
+     "../../../system_wrappers:field_trial",
+     "../../../system_wrappers:metrics",
+     "../utility:cascaded_biquad_filter",
++    "rnn_ns",
+   ]
+   absl_deps = [ "//third_party/abseil-cpp/absl/types:optional" ]
+ }
+diff --git a/modules/audio_processing/ns/noise_suppressor.cc b/modules/audio_processing/ns/noise_suppressor.cc
+index d66faa6ed400c8959ab870f290a8b9b107e3dde5..dea7c5280499699d7187d9bf1318f4a3cb1c0eb0 100644
+--- a/modules/audio_processing/ns/noise_suppressor.cc
++++ b/modules/audio_processing/ns/noise_suppressor.cc
+@@ -17,6 +17,7 @@
+ 
+ #include "modules/audio_processing/ns/fast_math.h"
+ #include "rtc_base/checks.h"
++#include "rtc_base/logging.h"
+ 
+ namespace webrtc {
+ 
+@@ -254,15 +255,18 @@ NoiseSuppressor::ChannelState::ChannelState(
+ 
+ NoiseSuppressor::NoiseSuppressor(const NsConfig& config,
+                                  size_t sample_rate_hz,
+-                                 size_t num_channels)
++                                 size_t num_channels,
++                                 bool rnn_enabled)
+     : num_bands_(NumBandsForRate(sample_rate_hz)),
+       num_channels_(num_channels),
++      rnn_enabled_(rnn_enabled),
+       suppression_params_(config.target_level),
+       filter_bank_states_heap_(NumChannelsOnHeap(num_channels_)),
+       upper_band_gains_heap_(NumChannelsOnHeap(num_channels_)),
+       energies_before_filtering_heap_(NumChannelsOnHeap(num_channels_)),
+       gain_adjustments_heap_(NumChannelsOnHeap(num_channels_)),
+       channels_(num_channels_) {
++  RTC_LOG(LS_INFO) << "NoiseSuppressor: sample_rate_hz=" << sample_rate_hz << ", num_bands=" << num_bands_ << ", num_channels=" << num_channels_ << ", rnn_enabled=" << rnn_enabled_;
+   for (size_t ch = 0; ch < num_channels_; ++ch) {
+     channels_[ch] =
+         std::make_unique<ChannelState>(suppression_params_, num_bands_);
+@@ -286,6 +290,12 @@ void NoiseSuppressor::AggregateWienerFilters(
+ }
+ 
+ void NoiseSuppressor::Analyze(const AudioBuffer& audio) {
++  //+by xxlang@2021-07-20 {
++  if (rnn_enabled_ && audio.num_bands() == 3 && audio.num_frames() == 480) {
++    return;
++  }
++  //+by xxlang@2021-07-20 }
++
+   // Prepare the noise estimator for the analysis stage.
+   for (size_t ch = 0; ch < num_channels_; ++ch) {
+     channels_[ch]->noise_estimator.PrepareAnalysis();
+@@ -379,7 +389,24 @@ void NoiseSuppressor::Analyze(const AudioBuffer& audio) {
+   }
+ }
+ 
+-void NoiseSuppressor::Process(AudioBuffer* audio) {
++bool NoiseSuppressor::Process(AudioBuffer* audio) {
++  //+by xxlang@2021-07-20 {
++  if (rnn_enabled_ && audio->num_bands() == 3 && audio->num_frames() == 480) {
++    if (!rnn_applyed_) {
++      RTC_LOG(LS_WARNING) << "switch on rnnoise for noise_suppressor=" << this;
++      rnn_applyed_ = true;
++    }
++    for (size_t ch = 0; ch < audio->num_channels(); ++ch) {
++      channels_[ch]->rnn_ns_.Process(audio->channels()[ch], audio->channels_const()[ch]);
++    }
++    return true;
++  }
++  if (rnn_applyed_) {
++    RTC_LOG(LS_WARNING) << "switch off rnnoise for noise_suppressor=" << this;
++    rnn_applyed_ = false;
++  }
++  //+by xxlang@2021-07-20 }
++
+   // Select the space for storing data during the processing.
+   std::array<FilterBankState, kMaxNumChannelsOnStack> filter_bank_states_stack;
+   rtc::ArrayView<FilterBankState> filter_bank_states(
+@@ -451,7 +478,7 @@ void NoiseSuppressor::Process(AudioBuffer* audio) {
+   // Only do the below processing if the output of the audio processing module
+   // is used.
+   if (!capture_output_used_) {
+-    return;
++    return false;
+   }
+ 
+   // Aggregate the Wiener filters for all channels.
+@@ -550,6 +577,8 @@ void NoiseSuppressor::Process(AudioBuffer* audio) {
+       }
+     }
+   }
++
++  return false;
+ }
+ 
+ }  // namespace webrtc
+diff --git a/modules/audio_processing/ns/noise_suppressor.h b/modules/audio_processing/ns/noise_suppressor.h
+index 1e321cf4a224c9dbc3eba98965b09ba91c698a1a..78a4f1f3854186f9b632359aac8492c3a9574c51 100644
+--- a/modules/audio_processing/ns/noise_suppressor.h
++++ b/modules/audio_processing/ns/noise_suppressor.h
+@@ -22,6 +22,7 @@
+ #include "modules/audio_processing/ns/ns_fft.h"
+ #include "modules/audio_processing/ns/speech_probability_estimator.h"
+ #include "modules/audio_processing/ns/wiener_filter.h"
++#include "modules/audio_processing/ns/rnn_ns/rnn.h" //+by xxlang@2021-07-20
+ 
+ namespace webrtc {
+ 
+@@ -30,7 +31,8 @@ class NoiseSuppressor {
+  public:
+   NoiseSuppressor(const NsConfig& config,
+                   size_t sample_rate_hz,
+-                  size_t num_channels);
++                  size_t num_channels,
++                  bool rnn_enabled);
+   NoiseSuppressor(const NoiseSuppressor&) = delete;
+   NoiseSuppressor& operator=(const NoiseSuppressor&) = delete;
+ 
+@@ -39,7 +41,7 @@ class NoiseSuppressor {
+   void Analyze(const AudioBuffer& audio);
+ 
+   // Applies noise suppression.
+-  void Process(AudioBuffer* audio);
++  bool Process(AudioBuffer* audio);
+ 
+   // Specifies whether the capture output will be used. The purpose of this is
+   // to allow the noise suppressor to deactivate some of the processing when the
+@@ -52,6 +54,8 @@ class NoiseSuppressor {
+  private:
+   const size_t num_bands_;
+   const size_t num_channels_;
++  bool rnn_enabled_ = false; //+by xxlang@2021-07-29
++  bool rnn_applyed_ = false; //+by xxlang@2021-07-29
+   const SuppressionParams suppression_params_;
+   int32_t num_analyzed_frames_ = -1;
+   NrFft fft_;
+@@ -60,6 +64,7 @@ class NoiseSuppressor {
+   struct ChannelState {
+     ChannelState(const SuppressionParams& suppression_params, size_t num_bands);
+ 
++   	rnn_ns::RnnNs rnn_ns_; //+by xxlang@2021-07-20
+     SpeechProbabilityEstimator speech_probability_estimator;
+     WienerFilter wiener_filter;
+     NoiseEstimator noise_estimator;
+diff --git a/modules/audio_processing/ns/rnn_ns/BUILD.gn b/modules/audio_processing/ns/rnn_ns/BUILD.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..4131c1957ca7b5d8964691f17b1fd0b09a617ae3
+--- /dev/null
++++ b/modules/audio_processing/ns/rnn_ns/BUILD.gn
+@@ -0,0 +1,33 @@
++# Copyright (c) 2018 The WebRTC project authors. All Rights Reserved.
++#
++# Use of this source code is governed by a BSD-style license
++# that can be found in the LICENSE file in the root of the source
++# tree. An additional intellectual property rights grant can be found
++# in the file PATENTS.  All contributing project authors may
++# be found in the AUTHORS file in the root of the source tree.
++
++import("../../../../webrtc.gni")
++
++rtc_library("rnn_ns") {
++  visibility = [ "../*" ]
++  sources = [
++    "rnn.cc",
++    "rnn.h",
++  ]
++
++  defines = []
++  if (rtc_build_with_neon && current_cpu != "arm64") {
++    suppressed_configs += [ "//build/config/compiler:compiler_arm_fpu" ]
++    cflags = [ "-mfpu=neon" ]
++  }
++
++  deps = [
++    "../../../../api:array_view",
++    "../../../../rtc_base:checks",
++    "../../../../rtc_base:safe_compare",
++    "../../../../rtc_base:safe_conversions",
++    "../../../../rtc_base/system:arch",
++    "../../../../system_wrappers",
++    "//third_party/rnnoise:rnn_ns",
++  ]
++}
+diff --git a/modules/audio_processing/ns/rnn_ns/rnn.cc b/modules/audio_processing/ns/rnn_ns/rnn.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c425e03a1476b3fb12cc9d92f7d68cadcddf59b6
+--- /dev/null
++++ b/modules/audio_processing/ns/rnn_ns/rnn.cc
+@@ -0,0 +1,34 @@
++/*
++ *  Copyright (c) 2018 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#include <algorithm>
++
++#include "modules/audio_processing/ns/rnn_ns/rnn.h"
++
++namespace webrtc {
++namespace rnn_ns {
++
++RnnNs::RnnNs() {
++	st_ = rnnoise_create(NULL);
++}
++
++RnnNs::~RnnNs() {
++	rnnoise_destroy(st_);
++}
++
++void RnnNs::Process(float* out, const float* in) {
++	rnnoise_process_frame(st_, out, in);
++	for (size_t i = 0; i < 480; i++) {
++		out[i] = std::min(std::max(out[i], -32768.f), 32767.f);
++	}
++}
++
++} // namespace rnn_ns
++} // namespace webrtc
+diff --git a/modules/audio_processing/ns/rnn_ns/rnn.h b/modules/audio_processing/ns/rnn_ns/rnn.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c5a9feee1b3e0fb5b8d7edb782995265fc43eaa
+--- /dev/null
++++ b/modules/audio_processing/ns/rnn_ns/rnn.h
+@@ -0,0 +1,39 @@
++/*
++ *  Copyright (c) 2018 The WebRTC project authors. All Rights Reserved.
++ *
++ *  Use of this source code is governed by a BSD-style license
++ *  that can be found in the LICENSE file in the root of the source
++ *  tree. An additional intellectual property rights grant can be found
++ *  in the file PATENTS.  All contributing project authors may
++ *  be found in the AUTHORS file in the root of the source tree.
++ */
++
++#ifndef MODULES_AUDIO_PROCESSING_NS_RNN_NS_RNN_H_
++#define MODULES_AUDIO_PROCESSING_NS_RNN_NS_RNN_H_
++
++#include <stddef.h>
++#include <sys/types.h>
++
++#include "third_party/rnnoise/src/rnnoise.h"
++
++namespace webrtc {
++namespace rnn_ns {
++
++// Recurrent network for noise supression.
++class RnnNs {
++public:
++	explicit RnnNs();
++	RnnNs(const RnnNs&) = delete;
++	RnnNs& operator=(const RnnNs&) = delete;
++	~RnnNs();
++
++	void Process(float* out, const float* in);
++
++private:
++	struct DenoiseState* st_;
++};
++
++} // namespace rnn_ns
++} // namespace webrtc
++
++#endif // MODULES_AUDIO_PROCESSING_NS_RNN_NS_RNN_H_
