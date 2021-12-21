@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 21 Dec 2021 09:43:58 +0800
+Subject: fix_border_for_native_window
+
+
+diff --git a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+index a0e8dc25d91fa453d680e58f0d9254c07f609bd1..263475893d3574bbed362dc71b1f4236528f96c8 100644
+--- a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
++++ b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+@@ -200,6 +200,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
+         break;
+       }
+ 
++#if 0 //-by xxlang@2021-11-15 {
+ #if defined(USE_AURA) || defined(OS_MAC)
+       if (desktop_id.window_id != DesktopMediaID::kNullId) {
+         start_capture_closure = base::BindOnce(
+@@ -210,6 +211,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
+         break;
+       }
+ #endif  // defined(USE_AURA) || defined(OS_MAC)
++#endif //-by xxlang@2021-11-15 }
+ 
+       // All cases other than tab capture or Aura desktop/window capture.
+       start_capture_closure = base::BindOnce(
