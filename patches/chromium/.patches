@@ -173,3 +173,4 @@ add_containerid_for_hid.patch
 add_capabilities_rnn_noise_suppression.patch
 enable_window_border.patch
 fix_border_for_native_window.patch
+add_containerid_for_hid_on_linux.patch

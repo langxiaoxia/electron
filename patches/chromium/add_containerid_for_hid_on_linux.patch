@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 27 Dec 2021 13:58:16 +0800
+Subject: add_containerid_for_hid_on_linux
+
+
+diff --git a/media/audio/audio_manager_unittest.cc b/media/audio/audio_manager_unittest.cc
+index 85aba43cd33c46a124d36dbed098852c3adbd947..9878632f9038c24fa669ac16e0e92bcb33bb4569 100644
+--- a/media/audio/audio_manager_unittest.cc
++++ b/media/audio/audio_manager_unittest.cc
+@@ -893,17 +893,17 @@ class TestAudioManager : public FakeAudioManager {
+   void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override {
+     DCHECK(device_names->empty());
+     device_names->emplace_back(AudioDeviceName::CreateDefault());
+-    device_names->emplace_back("Input 1", "input1");
+-    device_names->emplace_back("Input 2", "input2");
+-    device_names->emplace_back("Input 3", "input3");
++    device_names->emplace_back("Input 1", "input1", std::string());
++    device_names->emplace_back("Input 2", "input2", std::string());
++    device_names->emplace_back("Input 3", "input3", std::string());
+   }
+ 
+   void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override {
+     DCHECK(device_names->empty());
+     device_names->emplace_back(AudioDeviceName::CreateDefault());
+-    device_names->emplace_back("Output 1", "output1");
+-    device_names->emplace_back("Output 2", "output2");
+-    device_names->emplace_back("Output 3", "output3");
++    device_names->emplace_back("Output 1", "output1", std::string());
++    device_names->emplace_back("Output 2", "output2", std::string());
++    device_names->emplace_back("Output 3", "output3", std::string());
+   }
+ };
+ 
+diff --git a/media/audio/cras/audio_manager_chromeos.cc b/media/audio/cras/audio_manager_chromeos.cc
+index 15d368441282ca660569681ee2a50dd73db215cd..4abfbf6308f8664627f4054bfe04a194bfc66732 100644
+--- a/media/audio/cras/audio_manager_chromeos.cc
++++ b/media/audio/cras/audio_manager_chromeos.cc
+@@ -86,17 +86,20 @@ void ProcessVirtualDeviceName(AudioDeviceNames* device_names,
+   if (device_list[0].type == chromeos::AudioDeviceType::kLineout ||
+       device_list[1].type == chromeos::AudioDeviceType::kLineout) {
+     device_names->emplace_back(kHeadphoneLineOutVirtualDevice,
+-                               base::NumberToString(device_list[0].id));
++                               base::NumberToString(device_list[0].id),
++                               std::string());
+   } else if (device_list[0].type ==
+                  chromeos::AudioDeviceType::kInternalSpeaker ||
+              device_list[1].type ==
+                  chromeos::AudioDeviceType::kInternalSpeaker) {
+     device_names->emplace_back(kInternalOutputVirtualDevice,
+-                               base::NumberToString(device_list[0].id));
++                               base::NumberToString(device_list[0].id),
++                               std::string());
+   } else {
+     DCHECK(device_list[0].IsInternalMic() || device_list[1].IsInternalMic());
+     device_names->emplace_back(kInternalInputVirtualDevice,
+-                               base::NumberToString(device_list[0].id));
++                               base::NumberToString(device_list[0].id),
++                               std::string());
+   }
+ }
+ 
+@@ -152,7 +155,8 @@ void AudioManagerChromeOS::GetAudioDeviceNamesImpl(
+     if (1 == item.second.size()) {
+       const AudioDevice& device = item.second.front();
+       device_names->emplace_back(device.display_name,
+-                                 base::NumberToString(device.id));
++                                 base::NumberToString(device.id),
++                                 std::string());
+     } else {
+       // Create virtual device name for audio nodes that share the same device
+       // index.
+diff --git a/media/audio/cras/audio_manager_cras.cc b/media/audio/cras/audio_manager_cras.cc
+index 1f1b15e6e976f20c1952b5693cee81810407a1f0..bd66374ad4c353df633b2424c9aaa07451a39853 100644
+--- a/media/audio/cras/audio_manager_cras.cc
++++ b/media/audio/cras/audio_manager_cras.cc
+@@ -66,7 +66,7 @@ void AudioManagerCras::GetAudioInputDeviceNames(
+     AudioDeviceNames* device_names) {
+   device_names->push_back(AudioDeviceName::CreateDefault());
+   for (const auto& device : CrasGetAudioDevices(DeviceType::kInput)) {
+-    device_names->emplace_back(device.name, base::NumberToString(device.id));
++    device_names->emplace_back(device.name, base::NumberToString(device.id), std::string());
+   }
+ }
+ 
+@@ -74,7 +74,7 @@ void AudioManagerCras::GetAudioOutputDeviceNames(
+     AudioDeviceNames* device_names) {
+   device_names->push_back(AudioDeviceName::CreateDefault());
+   for (const auto& device : CrasGetAudioDevices(DeviceType::kOutput)) {
+-    device_names->emplace_back(device.name, base::NumberToString(device.id));
++    device_names->emplace_back(device.name, base::NumberToString(device.id), std::string());
+   }
+ }
+ 
+diff --git a/media/audio/pulse/audio_manager_pulse.cc b/media/audio/pulse/audio_manager_pulse.cc
+index 6705e04cb9526c59e610d258c7aa4e194e33df75..fbc41207b5c50be6603cadb0e10f9f7522582e36 100644
+--- a/media/audio/pulse/audio_manager_pulse.cc
++++ b/media/audio/pulse/audio_manager_pulse.cc
+@@ -301,7 +301,7 @@ void AudioManagerPulse::InputDevicesInfoCallback(pa_context* context,
+       return;
+   }
+ 
+-  manager->devices_->push_back(AudioDeviceName(info->description, info->name));
++  manager->devices_->push_back(AudioDeviceName(info->description, info->name, std::string()));
+ }
+ 
+ void AudioManagerPulse::OutputDevicesInfoCallback(pa_context* context,
+@@ -316,7 +316,7 @@ void AudioManagerPulse::OutputDevicesInfoCallback(pa_context* context,
+     return;
+   }
+ 
+-  manager->devices_->push_back(AudioDeviceName(info->description, info->name));
++  manager->devices_->push_back(AudioDeviceName(info->description, info->name, std::string()));
+ }
+ 
+ void AudioManagerPulse::AudioHardwareInfoCallback(pa_context* context,
