@@ -5,7 +5,10 @@ const semver = require('semver');
 //+by xxlang@2021-12-15 {
 const moment = require('moment');
 moment.locale('zh-cn');
-const tag = moment().format('YYYYMMDD');
+const build_date = moment().format('YYYY-MM-DD');
+const git = require('git-rev-sync');
+const build_rev = git.short();
+const tag = build_rev + '@' + build_date;
 //+by xxlang@2021-12-15 }
 
 const outputPath = process.argv[2];
