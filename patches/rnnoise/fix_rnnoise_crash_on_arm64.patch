@@ -1,0 +1,255 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 20 Jan 2022 17:39:24 +0800
+Subject: fix_rnnoise_crash_on_arm64
+
+
+diff --git a/third_party/rnnoise/src/celt_lpc.cc b/third_party/rnnoise/src/celt_lpc.cc
+index dad2253d2a008bc2fd3394d933cde71219c07f47..eca780bb6967273a6ce2139419967a942ce1e541 100644
+--- a/third_party/rnnoise/src/celt_lpc.cc
++++ b/third_party/rnnoise/src/celt_lpc.cc
+@@ -34,8 +34,6 @@
+ #include "common.h"
+ #include "pitch.h"
+ 
+-namespace rnnoise {
+-
+ void _celt_lpc(
+       opus_val16       *_lpc, /* out: [0...p-1] LPC coefficients      */
+ const opus_val32 *ac,  /* in:  [0...p] autocorrelation values  */
+@@ -280,5 +278,3 @@ int _celt_autocorr(
+ 
+    return shift;
+ }
+-
+-} // namespace rnnoise
+diff --git a/third_party/rnnoise/src/celt_lpc.h b/third_party/rnnoise/src/celt_lpc.h
+index 84e5a8d6fcb7c692652ff594a150e6900c3c7a58..56bd7a5dd32c8fac4a11024338e3e3bb06381858 100644
+--- a/third_party/rnnoise/src/celt_lpc.h
++++ b/third_party/rnnoise/src/celt_lpc.h
+@@ -35,8 +35,6 @@
+ #include "x86/celt_lpc_sse.h"
+ #endif
+ 
+-namespace rnnoise {
+-
+ #define LPC_ORDER 24
+ 
+ void _celt_lpc(opus_val16 *_lpc, const opus_val32 *ac, int p);
+@@ -58,6 +56,4 @@ void celt_iir(const opus_val32 *x,
+ int _celt_autocorr(const opus_val16 *x, opus_val32 *ac,
+          const opus_val16 *window, int overlap, int lag, int n);
+ 
+-} // namespace rnnoise
+-
+ #endif /* THIRD_PARTY_RNNOISE_SRC_CELT_LPC_H_ */
+diff --git a/third_party/rnnoise/src/common.h b/third_party/rnnoise/src/common.h
+index b5138c9b76b467496ff8bffba15554aa43f75c42..609db0f5e2017ca6820da311a02f2453325cd319 100644
+--- a/third_party/rnnoise/src/common.h
++++ b/third_party/rnnoise/src/common.h
+@@ -4,8 +4,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-namespace rnnoise {
+-
+ #define RNN_INLINE inline
+ #define OPUS_INLINE inline
+ 
+@@ -43,6 +41,4 @@ static RNN_INLINE void rnnoise_free (void *ptr)
+ #define RNN_CLEAR(dst, n) (memset((dst), 0, (n)*sizeof(*(dst))))
+ #endif
+ 
+-} // namespace rnnoise
+-
+ #endif /* THIRD_PARTY_RNNOISE_SRC_COMMON_H_ */
+diff --git a/third_party/rnnoise/src/denoise.cc b/third_party/rnnoise/src/denoise.cc
+index 6f423a1d26dbe1ed94d332ebc3ed89152c3b794b..0268ed1f3244c165f6eb179484ffb27f8b34ad19 100644
+--- a/third_party/rnnoise/src/denoise.cc
++++ b/third_party/rnnoise/src/denoise.cc
+@@ -41,8 +41,6 @@
+ #include "rnn.h"
+ #include "rnn_data.h"
+ 
+-using namespace rnnoise;
+-
+ #define FRAME_SIZE_SHIFT 2
+ #define FRAME_SIZE (120<<FRAME_SIZE_SHIFT)
+ #define WINDOW_SIZE (2*FRAME_SIZE)
+diff --git a/third_party/rnnoise/src/kiss_fft.cc b/third_party/rnnoise/src/kiss_fft.cc
+index 7e7f7c08d5648fb2b4a9351c941e823f9687a2da..2330b81c105166c2c8928b0cb655357f98a424a3 100644
+--- a/third_party/rnnoise/src/kiss_fft.cc
++++ b/third_party/rnnoise/src/kiss_fft.cc
+@@ -37,8 +37,6 @@
+ 
+ #include "_kiss_fft_guts.h"
+ 
+-namespace rnnoise {
+-
+ #define CUSTOM_MODES
+ 
+ /* The guts header contains all the multiplication and addition macros that are defined for
+@@ -509,16 +507,16 @@ void opus_fft_free(const kiss_fft_state *cfg, int arch)
+    if (cfg)
+    {
+       opus_fft_free_arch((kiss_fft_state *)cfg, arch);
+-      opus_free((opus_int16*)cfg->bitrev);
++      rnnoise_free((opus_int16*)cfg->bitrev);
+       if (cfg->shift < 0)
+-         opus_free((kiss_twiddle_cpx*)cfg->twiddles);
+-      opus_free((kiss_fft_state*)cfg);
++         rnnoise_free((kiss_twiddle_cpx*)cfg->twiddles);
++      rnnoise_free((kiss_fft_state*)cfg);
+    }
+ }
+ 
+ #endif /* CUSTOM_MODES */
+ 
+-void opus_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout)
++static void opus_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout)
+ {
+     int m2, m;
+     int p;
+@@ -566,7 +564,7 @@ void opus_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout)
+     }
+ }
+ 
+-void opus_fft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
++void rnnoise_fft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
+ {
+    int i;
+    opus_val16 scale;
+@@ -589,7 +587,7 @@ void opus_fft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *f
+ }
+ 
+ 
+-void opus_ifft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
++void rnnoise_ifft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *fout)
+ {
+    int i;
+    celt_assert2 (fin != fout, "In-place FFT not supported");
+@@ -602,5 +600,3 @@ void opus_ifft_c(const kiss_fft_state *st,const kiss_fft_cpx *fin,kiss_fft_cpx *
+    for (i=0;i<st->nfft;i++)
+       fout[i].i = -fout[i].i;
+ }
+-
+-} // namespace rnnoise
+diff --git a/third_party/rnnoise/src/kiss_fft.h b/third_party/rnnoise/src/kiss_fft.h
+index 36c7a97bf8a9934dce1d7473e1cfe356dc6d6939..deae581270287faa737d3208a5576dc65614ec3f 100644
+--- a/third_party/rnnoise/src/kiss_fft.h
++++ b/third_party/rnnoise/src/kiss_fft.h
+@@ -33,11 +33,6 @@
+ #include <math.h>
+ #include "arch.h"
+ 
+-namespace rnnoise {
+-
+-#define opus_alloc(x) malloc(x)
+-#define opus_free(x) free(x)
+-
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -47,7 +42,7 @@ extern "C" {
+ # define kiss_fft_scalar __m128
+ #define KISS_FFT_MALLOC(nbytes) memalign(16,nbytes)
+ #else
+-#define KISS_FFT_MALLOC opus_alloc
++#define KISS_FFT_MALLOC rnnoise_alloc
+ #endif
+ 
+ #ifdef FIXED_POINT
+@@ -143,19 +138,19 @@ kiss_fft_state *opus_fft_alloc(int nfft,void * mem,size_t * lenmem, int arch);
+  * Note that each element is complex and can be accessed like
+     f[k].r and f[k].i
+  * */
+-void opus_fft_c(const kiss_fft_state *cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout);
+-void opus_ifft_c(const kiss_fft_state *cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout);
++void rnnoise_fft_c(const kiss_fft_state *cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout);
++void rnnoise_ifft_c(const kiss_fft_state *cfg,const kiss_fft_cpx *fin,kiss_fft_cpx *fout);
+ 
+-void opus_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout);
+-void opus_ifft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout);
++//void opus_fft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout);
++//void opus_ifft_impl(const kiss_fft_state *st,kiss_fft_cpx *fout);
+ 
+ void opus_fft_free(const kiss_fft_state *cfg, int arch);
+ 
+-
+ void opus_fft_free_arch_c(kiss_fft_state *st);
+ int opus_fft_alloc_arch_c(kiss_fft_state *st);
+ 
+ #if !defined(OVERRIDE_OPUS_FFT)
++
+ /* Is run-time CPU detection enabled on this platform? */
+ #if defined(OPUS_HAVE_RTCD) && (defined(HAVE_ARM_NE10))
+ 
+@@ -189,18 +184,17 @@ extern void (*const OPUS_IFFT[OPUS_ARCHMASK+1])(const kiss_fft_state *cfg,
+          ((void)(arch), opus_fft_free_arch_c(_st))
+ 
+ #define opus_fft(_cfg, _fin, _fout, arch) \
+-         ((void)(arch), opus_fft_c(_cfg, _fin, _fout))
++         ((void)(arch), rnnoise_fft_c(_cfg, _fin, _fout))
+ 
+ #define opus_ifft(_cfg, _fin, _fout, arch) \
+-         ((void)(arch), opus_ifft_c(_cfg, _fin, _fout))
++         ((void)(arch), rnnoise_ifft_c(_cfg, _fin, _fout))
+ 
+ #endif /* end if defined(OPUS_HAVE_RTCD) && (defined(HAVE_ARM_NE10)) */
++
+ #endif /* end if !defined(OVERRIDE_OPUS_FFT) */
+ 
+ #ifdef __cplusplus
+ }
+ #endif
+ 
+-} // namespace rnnoise
+-
+ #endif /* THIRD_PARTY_RNNOISE_SRC_KISS_FFT_H_ */
+diff --git a/third_party/rnnoise/src/pitch.cc b/third_party/rnnoise/src/pitch.cc
+index 89e6d5632d2e47f631d0a5f359fa1ea5ef5ad721..6817fe04fa23eb6dd455f82aac03b2c058ee624b 100644
+--- a/third_party/rnnoise/src/pitch.cc
++++ b/third_party/rnnoise/src/pitch.cc
+@@ -43,8 +43,6 @@
+ #include "celt_lpc.h"
+ #include "math.h"
+ 
+-namespace rnnoise {
+-
+ static void find_best_pitch(opus_val32 *xcorr, opus_val16 *y, int len,
+                             int max_pitch, int *best_pitch
+ #ifdef FIXED_POINT
+@@ -220,7 +218,6 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
+ void celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,
+       opus_val32 *xcorr, int len, int max_pitch)
+ {
+-
+ #if 0 /* This is a simple version of the pitch correlation that should work
+          well on DSPs like Blackfin and TI C5x/C6x */
+    int i, j;
+@@ -527,5 +524,3 @@ opus_val16 remove_doubling(opus_val16 *x, int maxperiod, int minperiod,
+ 
+    return pg;
+ }
+-
+-} // namespace rnnoise
+diff --git a/third_party/rnnoise/src/pitch.h b/third_party/rnnoise/src/pitch.h
+index 619d735cac16ad59a59182a2aeb65e144da232cf..bcba6316e04bbfb28e0016570fa98fad8710c2e6 100644
+--- a/third_party/rnnoise/src/pitch.h
++++ b/third_party/rnnoise/src/pitch.h
+@@ -38,8 +38,6 @@
+ //#include "cpu_support.h"
+ #include "arch.h"
+ 
+-namespace rnnoise {
+-
+ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
+       int len, int C);
+ 
+@@ -148,6 +146,4 @@ static OPUS_INLINE opus_val32 celt_inner_prod(const opus_val16 *x,
+ void celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,
+       opus_val32 *xcorr, int len, int max_pitch);
+ 
+-} // namespace rnnoise
+-
+ #endif /* THIRD_PARTY_RNNOISE_SRC_PITCH_H_ */

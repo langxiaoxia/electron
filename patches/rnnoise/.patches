@@ -1,1 +1,2 @@
 add_rnnoise_ns.patch
+fix_rnnoise_crash_on_arm64.patch
