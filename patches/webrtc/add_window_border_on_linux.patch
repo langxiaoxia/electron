@@ -1,0 +1,884 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 25 Jan 2022 17:33:19 +0800
+Subject: add_window_border_on_linux
+
+
+diff --git a/modules/desktop_capture/BUILD.gn b/modules/desktop_capture/BUILD.gn
+index dd1dba0726448a5324fed1017463b4da4192024d..7eaaeef841a073247241418a923762cdb9e9d101 100644
+--- a/modules/desktop_capture/BUILD.gn
++++ b/modules/desktop_capture/BUILD.gn
+@@ -395,6 +395,7 @@ rtc_library("desktop_capture_generic") {
+       "mouse_cursor_monitor_linux.cc",
+       "screen_capturer_linux.cc",
+       "window_capturer_linux.cc",
++      "window_border_linux.cc",
+     ]
+ 
+     if (build_with_mozilla && (is_linux || is_chromeos)) {
+diff --git a/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc b/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
+index ecc780fcf91846f4f652e1c4516660cf27045a32..9f1bd3c157195ff83000b32733a10deb5610f9b8 100644
+--- a/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
++++ b/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
+@@ -122,6 +122,7 @@ void FallbackDesktopCapturerWrapper::CaptureFrame() {
+       if (first_capture_) {
+         first_capture_ = false;
+       } else {
++        RTC_LOG(LS_WARNING) << "FallbackDesktopCapturerWrapper create border for screen " << selected_screen_;
+         window_border_->CreateForScreen(GetSelectedScreenRect());
+       }
+     }
+diff --git a/modules/desktop_capture/linux/screen_capturer_x11.cc b/modules/desktop_capture/linux/screen_capturer_x11.cc
+index 1b17071411943241554a85d3c01e4696baf3ed37..868857d8d27fd8d6b5b95e97641f21cac54cd974 100644
+--- a/modules/desktop_capture/linux/screen_capturer_x11.cc
++++ b/modules/desktop_capture/linux/screen_capturer_x11.cc
+@@ -34,14 +34,24 @@
+ #include "rtc_base/sanitizer.h"
+ #include "rtc_base/time_utils.h"
+ #include "rtc_base/trace_event.h"
++#include "rtc_base/platform_thread_types.h"
+ 
+ namespace webrtc {
+ 
+-ScreenCapturerX11::ScreenCapturerX11() {
++ScreenCapturerX11::ScreenCapturerX11(bool enable_border)
++      //+by xxlang@2021-12-28 {
++    : enable_border_(enable_border),
++      first_capture_(true),
++      window_border_(DesktopCapturer::CreateWindowBorder())
++      //+by xxlang@2021-12-28 }
++{
++  RTC_LOG(LS_INFO) << "ScreenCapturerX11(" << this << ") " << (enable_border_ ? "with" : "without") << " border";
+   helper_.SetLogGridSize(4);
+ }
+ 
+ ScreenCapturerX11::~ScreenCapturerX11() {
++  window_border_ = nullptr; //+by xxlang@2022-01-14
++  RTC_LOG(LS_INFO) << "~ScreenCapturerX11(" << this << ") " << (enable_border_ ? "with" : "without") << " border";
+   options_.x_display()->RemoveEventHandler(ConfigureNotify, this);
+   if (use_damage_) {
+     options_.x_display()->RemoveEventHandler(damage_event_base_ + XDamageNotify,
+@@ -103,6 +113,12 @@ bool ScreenCapturerX11::Init(const DesktopCaptureOptions& options) {
+   // Default source set here so that selected_monitor_rect_ is sized correctly.
+   SelectSource(kFullDesktopScreenId);
+ 
++  //+by xxlang@2021-12-28 {
++  if (enable_border_) {
++    window_border_->Init(options_.x_display(), DefaultScreen(display()));
++  }
++  //+by xxlang@2021-12-28 }
++
+   return true;
+ }
+ 
+@@ -194,17 +210,36 @@ void ScreenCapturerX11::UpdateMonitors() {
+ 
+   if (selected_monitor_name_) {
+     if (selected_monitor_name_ == static_cast<Atom>(kFullDesktopScreenId)) {
++      RTC_LOG(LS_INFO) << "XRandR desktop rect updated. ("
++                      << selected_monitor_rect_.left() << ", "
++                      << selected_monitor_rect_.top() << ") "
++                      << selected_monitor_rect_.width() << "x"
++                      << selected_monitor_rect_.height() << " => ("
++                      << 0 << ", "
++                      << 0 << ") "
++                      << x_server_pixel_buffer_.window_size().width() << "x"
++                      << x_server_pixel_buffer_.window_size().height();
+       selected_monitor_rect_ =
+           DesktopRect::MakeSize(x_server_pixel_buffer_.window_size());
++      window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+       return;
+     }
+ 
+     for (int i = 0; i < num_monitors_; ++i) {
+       XRRMonitorInfo& m = monitors_[i];
+       if (selected_monitor_name_ == m.name) {
+-        RTC_LOG(LS_INFO) << "XRandR monitor " << m.name << " rect updated.";
++        RTC_LOG(LS_INFO) << "XRandR monitor " << m.name << " rect updated. ("
++                      << selected_monitor_rect_.left() << ", "
++                      << selected_monitor_rect_.top() << ") "
++                      << selected_monitor_rect_.width() << "x"
++                      << selected_monitor_rect_.height() << " => ("
++                      << m.x << ", "
++                      << m.y << ") "
++                      << m.width << "x"
++                      << m.height;
+         selected_monitor_rect_ =
+             DesktopRect::MakeXYWH(m.x, m.y, m.width, m.height);
++        window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+         return;
+       }
+     }
+@@ -213,6 +248,7 @@ void ScreenCapturerX11::UpdateMonitors() {
+     RTC_LOG(LS_INFO) << "XRandR selected monitor " << selected_monitor_name_
+                      << " lost.";
+     selected_monitor_rect_ = DesktopRect::MakeWH(0, 0);
++    window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+   }
+ }
+ 
+@@ -243,6 +279,20 @@ void ScreenCapturerX11::CaptureFrame() {
+     return;
+   }
+ 
++  //+by xxlang@2021-12-28 {
++  if (enable_border_ && !window_border_->IsCreated()) {
++    if (first_capture_) {
++      RTC_LOG(LS_WARNING) << "ScreenCapturerX11(" << this << "): Thread=" << rtc::CurrentThreadId() << ", screen=" << selected_monitor_name_;
++      first_capture_ = false;
++    } else {
++      RTC_LOG(LS_INFO) << "ScreenCapturerX11 create border for screen " << selected_monitor_name_
++                       << ", rect(" << selected_monitor_rect_.left() << ", " << selected_monitor_rect_.top()
++                       << ") " << selected_monitor_rect_.width() << "x" << selected_monitor_rect_.height();
++      window_border_->CreateForScreen(selected_monitor_rect_);
++    }
++  }
++  //+by xxlang@2021-12-28 }
++
+   // Allocate the current frame buffer only if it is not already allocated.
+   // Note that we can't reallocate other buffers at this point, since the caller
+   // may still be reading from them.
+@@ -285,6 +335,7 @@ bool ScreenCapturerX11::GetSourceList(SourceList* sources) {
+     char* monitor_title = XGetAtomName(display(), m.name);
+ 
+     // Note name is an X11 Atom used to id the monitor.
++    RTC_LOG(LS_INFO) << "monitor: name=" << m.name << ", noutput=" << m.noutput << ", title=" << monitor_title;
+     sources->push_back({static_cast<SourceId>(m.name), monitor_title});
+     XFree(monitor_title);
+   }
+@@ -300,19 +351,22 @@ bool ScreenCapturerX11::SelectSource(SourceId id) {
+   queue_.Reset();
+ 
+   if (!use_randr_ || id == kFullDesktopScreenId) {
++    RTC_LOG(LS_INFO) << "ScreenCapturerX11::SelectSource " << static_cast<SourceId>(selected_monitor_name_) << " => " << id;
+     selected_monitor_name_ = kFullDesktopScreenId;
+     selected_monitor_rect_ =
+         DesktopRect::MakeSize(x_server_pixel_buffer_.window_size());
++    window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+     return true;
+   }
+ 
+   for (int i = 0; i < num_monitors_; ++i) {
+     if (id == static_cast<SourceId>(monitors_[i].name)) {
+-      RTC_LOG(LS_INFO) << "XRandR selected source: " << id;
++      RTC_LOG(LS_INFO) << "ScreenCapturerX11::SelectSource " << static_cast<SourceId>(selected_monitor_name_) << " => " << id;
+       XRRMonitorInfo& m = monitors_[i];
+       selected_monitor_name_ = m.name;
+       selected_monitor_rect_ =
+           DesktopRect::MakeXYWH(m.x, m.y, m.width, m.height);
++      window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+       return true;
+     }
+   }
+@@ -320,6 +374,7 @@ bool ScreenCapturerX11::SelectSource(SourceId id) {
+ }
+ 
+ bool ScreenCapturerX11::HandleXEvent(const XEvent& event) {
++  RTC_LOG(LS_INFO) << "ScreenCapturerX11 event=" << event.type << ", window=" << event.xany.window;
+   if (use_damage_ && (event.type == damage_event_base_ + XDamageNotify)) {
+     const XDamageNotifyEvent* damage_event =
+         reinterpret_cast<const XDamageNotifyEvent*>(&event);
+@@ -329,11 +384,12 @@ bool ScreenCapturerX11::HandleXEvent(const XEvent& event) {
+     return true;
+   } else if (use_randr_ &&
+              event.type == randr_event_base_ + RRScreenChangeNotify) {
++    RTC_LOG(LS_INFO) << "XRandR screen change event received.";
+     XRRUpdateConfiguration(const_cast<XEvent*>(&event));
+     UpdateMonitors();
+-    RTC_LOG(LS_INFO) << "XRandR screen change event received.";
+     return true;
+   } else if (event.type == ConfigureNotify) {
++    RTC_LOG(LS_INFO) << "Screen configure change event received.";
+     ScreenConfigurationChanged();
+     return true;
+   }
+@@ -409,6 +465,7 @@ void ScreenCapturerX11::ScreenConfigurationChanged() {
+   if (!use_randr_) {
+     selected_monitor_rect_ =
+         DesktopRect::MakeSize(x_server_pixel_buffer_.window_size());
++    window_border_->OnScreenRectChanged(selected_monitor_rect_); //+by xxlang@2021-12-28
+   }
+ }
+ 
+@@ -469,7 +526,7 @@ std::unique_ptr<DesktopCapturer> ScreenCapturerX11::CreateRawScreenCapturer(
+   if (!options.x_display())
+     return nullptr;
+ 
+-  std::unique_ptr<ScreenCapturerX11> capturer(new ScreenCapturerX11());
++  std::unique_ptr<ScreenCapturerX11> capturer(new ScreenCapturerX11(options.enable_border()));
+   if (!capturer.get()->Init(options)) {
+     return nullptr;
+   }
+diff --git a/modules/desktop_capture/linux/screen_capturer_x11.h b/modules/desktop_capture/linux/screen_capturer_x11.h
+index b19e2e46e71065d5b33d92cb7998d75ae940dabc..b7fcaeae03952db88509f9e0837e79bbe67fa814 100644
+--- a/modules/desktop_capture/linux/screen_capturer_x11.h
++++ b/modules/desktop_capture/linux/screen_capturer_x11.h
+@@ -29,6 +29,7 @@
+ #include "modules/desktop_capture/screen_capture_frame_queue.h"
+ #include "modules/desktop_capture/screen_capturer_helper.h"
+ #include "modules/desktop_capture/shared_desktop_frame.h"
++#include "modules/desktop_capture/window_border.h" //+by xxlang@2021-12-28
+ #include "rtc_base/constructor_magic.h"
+ 
+ namespace webrtc {
+@@ -43,7 +44,7 @@ namespace webrtc {
+ class ScreenCapturerX11 : public DesktopCapturer,
+                           public SharedXDisplay::XEventHandler {
+  public:
+-  ScreenCapturerX11();
++  ScreenCapturerX11(bool enable_border);
+   ~ScreenCapturerX11() override;
+ 
+   static std::unique_ptr<DesktopCapturer> CreateRawScreenCapturer(
+@@ -139,6 +140,12 @@ class ScreenCapturerX11 : public DesktopCapturer,
+ 
+   std::unique_ptr<XAtomCache> atom_cache_;
+ 
++  //+by xxlang@2021-12-28 {
++  bool enable_border_;
++  bool first_capture_;
++  std::unique_ptr<WindowBorder> window_border_;
++  //+by xxlang@2021-12-28 }
++
+   RTC_DISALLOW_COPY_AND_ASSIGN(ScreenCapturerX11);
+ };
+ 
+diff --git a/modules/desktop_capture/linux/window_capturer_x11.cc b/modules/desktop_capture/linux/window_capturer_x11.cc
+index 94f9f92c81f2878d59d0b124aaf05ab2f247ba6f..967c2441ab8445d2d646e371d2e7761862e17ab0 100644
+--- a/modules/desktop_capture/linux/window_capturer_x11.cc
++++ b/modules/desktop_capture/linux/window_capturer_x11.cc
+@@ -29,19 +29,34 @@
+ #include "rtc_base/checks.h"
+ #include "rtc_base/logging.h"
+ #include "rtc_base/trace_event.h"
++#include "rtc_base/platform_thread_types.h"
+ 
+ namespace webrtc {
+ 
+ WindowCapturerX11::WindowCapturerX11(const DesktopCaptureOptions& options)
+     : x_display_(options.x_display()),
+       atom_cache_(display()),
+-      window_finder_(&atom_cache_) {
++      window_finder_(&atom_cache_),
++      //+by xxlang@2022-01-04 {
++      enable_border_(options.enable_border()),
++      first_capture_(true),
++      window_border_(DesktopCapturer::CreateWindowBorder())
++      //+by xxlang@2022-01-04 }
++{
++  RTC_LOG(LS_INFO) << "WindowCapturerX11(" << this << ") " << (enable_border_ ? "with" : "without") << " border";
++  //+by xxlang@2022-01-04 {
++  if (enable_border_) {
++    window_border_->Init(x_display_, DefaultScreen(display()));
++  }
++  //+by xxlang@2022-01-04 }
++
+   int event_base, error_base, major_version, minor_version;
+   if (XCompositeQueryExtension(display(), &event_base, &error_base) &&
+       XCompositeQueryVersion(display(), &major_version, &minor_version) &&
+       // XCompositeNameWindowPixmap() requires version 0.2
+       (major_version > 0 || minor_version >= 2)) {
+     has_composite_extension_ = true;
++    RTC_LOG(LS_INFO) << "Xcomposite extension v" << major_version << "." << minor_version;
+   } else {
+     RTC_LOG(LS_INFO) << "Xcomposite extension not available or too old.";
+   }
+@@ -50,6 +65,8 @@ WindowCapturerX11::WindowCapturerX11(const DesktopCaptureOptions& options)
+ }
+ 
+ WindowCapturerX11::~WindowCapturerX11() {
++  window_border_ = nullptr; //+by xxlang@2022-01-14
++  RTC_LOG(LS_INFO) << "~WindowCapturerX11(" << this << ") " << (enable_border_ ? "with" : "without") << " border";
+   x_display_->RemoveEventHandler(ConfigureNotify, this);
+ }
+ 
+@@ -144,6 +161,7 @@ void WindowCapturerX11::CaptureFrame() {
+   if (!x_server_pixel_buffer_.IsWindowValid()) {
+     RTC_LOG(LS_ERROR) << "The window is no longer valid.";
+     callback_->OnCaptureResult(Result::ERROR_PERMANENT, nullptr);
++    window_border_->Destroy(); //+by xxlang@2022-01-04
+     return;
+   }
+ 
+@@ -163,9 +181,22 @@ void WindowCapturerX11::CaptureFrame() {
+     std::unique_ptr<DesktopFrame> frame(
+         new BasicDesktopFrame(DesktopSize(1, 1)));
+     callback_->OnCaptureResult(Result::SUCCESS, std::move(frame));
++    window_border_->Destroy(); //+by xxlang@2022-01-04
+     return;
+   }
+ 
++  //+by xxlang@2022-01-04 {
++  if (enable_border_ && !window_border_->IsCreated()) {
++    if (first_capture_) {
++      RTC_LOG(LS_WARNING) << "WindowCapturerX11(" << this << "): Thread=" << rtc::CurrentThreadId() << ", window=" << selected_window_;
++      first_capture_ = false;
++    } else {
++      RTC_LOG(LS_WARNING) << "WindowCapturerX11 create border for window " << selected_window_;
++      window_border_->CreateForWindow(selected_window_);
++    }
++  }
++  //+by xxlang@2022-01-04 }
++
+   std::unique_ptr<DesktopFrame> frame(
+       new BasicDesktopFrame(x_server_pixel_buffer_.window_size()));
+ 
+@@ -193,11 +224,15 @@ bool WindowCapturerX11::HandleXEvent(const XEvent& event) {
+   if (event.type == ConfigureNotify) {
+     XConfigureEvent xce = event.xconfigure;
+     if (xce.window == selected_window_) {
++      RTC_LOG(LS_INFO) << "HandleXEvent: type=ConfigureNotify"
++          << ", x=" << xce.x << ", y=" << xce.y << ", width=" << xce.width << ", height=" << xce.height;
+       if (!DesktopRectFromXAttributes(xce).equals(
+               x_server_pixel_buffer_.window_rect())) {
+         if (!x_server_pixel_buffer_.Init(&atom_cache_, selected_window_)) {
+           RTC_LOG(LS_ERROR)
+               << "Failed to initialize pixel buffer after resizing.";
++        } else {
++          window_border_->OnScreenRectChanged(x_server_pixel_buffer_.window_rect()); //+by xxlang@2022-01-25
+         }
+       }
+     }
+diff --git a/modules/desktop_capture/linux/window_capturer_x11.h b/modules/desktop_capture/linux/window_capturer_x11.h
+index f689dd6f5eb47d028b641899dff3e7dff0b23839..9d40feb9c66bac98bf5fcb98bc88c854a214b168 100644
+--- a/modules/desktop_capture/linux/window_capturer_x11.h
++++ b/modules/desktop_capture/linux/window_capturer_x11.h
+@@ -25,6 +25,7 @@
+ #include "modules/desktop_capture/linux/window_finder_x11.h"
+ #include "modules/desktop_capture/linux/x_atom_cache.h"
+ #include "modules/desktop_capture/linux/x_server_pixel_buffer.h"
++#include "modules/desktop_capture/window_border.h" //+by xxlang@2022-01-04
+ #include "rtc_base/constructor_magic.h"
+ 
+ namespace webrtc {
+@@ -66,6 +67,12 @@ class WindowCapturerX11 : public DesktopCapturer,
+   XAtomCache atom_cache_;
+   WindowFinderX11 window_finder_;
+ 
++  //+by xxlang@2022-01-04 {
++  bool enable_border_;
++  bool first_capture_;
++  std::unique_ptr<WindowBorder> window_border_;
++  //+by xxlang@2022-01-04 }
++
+   RTC_DISALLOW_COPY_AND_ASSIGN(WindowCapturerX11);
+ };
+ 
+diff --git a/modules/desktop_capture/linux/window_list_utils.cc b/modules/desktop_capture/linux/window_list_utils.cc
+index 06660dde1a59c92fa1a19b44c78707301c3bc4da..12b41d379e1dc0ee15aee367a0077304427abac1 100644
+--- a/modules/desktop_capture/linux/window_list_utils.cc
++++ b/modules/desktop_capture/linux/window_list_utils.cc
+@@ -196,4 +196,41 @@ bool GetWindowRect(::Display* display,
+   return true;
+ }
+ 
++//+by xxlang@2022-01-15 {
++void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect) {
++  long* extents = nullptr;
++  Atom actual_type;
++  int actual_format;
++  unsigned long nitems, bytes_after;
++  unsigned char* data = nullptr;
++  int result;
++
++  *rect = DesktopRect::MakeLTRB(0, 0, 0, 0);
++
++  result = XGetWindowProperty(display, window,
++      XInternAtom(display, "_GTK_FRAME_EXTENTS", True),
++      0, 4, False, AnyPropertyType,
++      &actual_type, &actual_format,
++      &nitems, &bytes_after, &data);
++
++  if (result == Success) {
++    if ((actual_format == 32) && (nitems == 4) && (bytes_after == 0)) {
++      extents = (long*)data;
++      *rect = DesktopRect::MakeLTRB(
++            (int32_t)*(extents), // [0]left
++            (int32_t)*(extents + 2), // [2]top
++            (int32_t)*(extents + 1), // [1]right
++            (int32_t)*(extents + 3) // [3]bottom
++          );
++//      RTC_LOG(LS_INFO) << "XGetWindowProperty(_GTK_FRAME_EXTENTS) ok left=" << rect->left() << ", right=" << rect->right() << ", top=" << rect->top() << ", bottom=" << rect->bottom();
++    } else {
++//      RTC_LOG(LS_ERROR) << "XGetWindowProperty(_GTK_FRAME_EXTENTS) ok but actual_format=" << actual_format << ", nitems=" << nitems << ", bytes_after=" << bytes_after;
++    }
++    XFree(data);
++  } else {
++    RTC_LOG(LS_ERROR) << "XGetWindowProperty(_GTK_FRAME_EXTENTS) failed";
++  }
++}
++//+by xxlang@2022-01-15 }
++
+ }  // namespace webrtc
+diff --git a/modules/desktop_capture/linux/window_list_utils.h b/modules/desktop_capture/linux/window_list_utils.h
+index 243680d34bf4963528292cc79c2f8ed73e538826..6e50c0b6a7545f21446187037ffcef3d56335dbd 100644
+--- a/modules/desktop_capture/linux/window_list_utils.h
++++ b/modules/desktop_capture/linux/window_list_utils.h
+@@ -44,6 +44,8 @@ bool GetWindowRect(::Display* display,
+                    DesktopRect* rect,
+                    XWindowAttributes* attributes = nullptr);
+ 
++void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect); //+by xxlang@2022-01-15
++
+ // Creates a DesktopRect from |attributes|.
+ template <typename T>
+ DesktopRect DesktopRectFromXAttributes(const T& attributes) {
+diff --git a/modules/desktop_capture/window_border.h b/modules/desktop_capture/window_border.h
+index 8007793e20c44424d76becc2fa2e364708cced95..d81bae8c69354839a6ad97e96b0174b13cc3b84f 100644
+--- a/modules/desktop_capture/window_border.h
++++ b/modules/desktop_capture/window_border.h
+@@ -5,6 +5,10 @@
+ #ifndef MODULES_DESKTOP_CAPTURE_WINDOW_BORDER_H_
+ #define MODULES_DESKTOP_CAPTURE_WINDOW_BORDER_H_
+ 
++#if defined(WEBRTC_USE_X11)
++#include "modules/desktop_capture/linux/shared_x_display.h"
++#endif // WEBRTC_USE_X11
++
+ #include "modules/desktop_capture/desktop_capturer.h"
+ #include "modules/desktop_capture/desktop_geometry.h"
+ 
+@@ -15,6 +19,9 @@ class WindowBorder {
+   WindowBorder() = default;
+   virtual ~WindowBorder() = default;
+ 
++#if defined(WEBRTC_USE_X11)
++  virtual void Init(rtc::scoped_refptr<SharedXDisplay> x_display, int screen_num) = 0;
++#endif // WEBRTC_USE_X11
+   virtual bool CreateForWindow(DesktopCapturer::SourceId source_id) = 0;
+   virtual bool CreateForScreen(const DesktopRect &window_rect) = 0;
+   virtual bool IsCreated() = 0;
+diff --git a/modules/desktop_capture/window_border_linux.cc b/modules/desktop_capture/window_border_linux.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..58fe1e089d53bda3d7d48b508d47ef16515e7747
+--- /dev/null
++++ b/modules/desktop_capture/window_border_linux.cc
+@@ -0,0 +1,428 @@
++// Copyright (c) 2021 xxlang@grandstream.cn.
++// Use of this source code is governed by the MIT license that can be
++// found in the LICENSE file.
++
++#include <X11/X.h>
++#include <X11/Xlib.h>
++#include <X11/Xutil.h>
++#include <X11/Xatom.h>
++
++#include <X11/extensions/Xcomposite.h>
++#include <X11/extensions/Xfixes.h>
++#include <X11/extensions/shape.h>
++
++#include <cairo/cairo.h>
++#include <cairo/cairo-xlib.h>
++
++#include "api/scoped_refptr.h"
++#include "modules/desktop_capture/window_border.h"
++#include "modules/desktop_capture/linux/shared_x_display.h"
++#include "modules/desktop_capture/linux/window_list_utils.h"
++#include "rtc_base/constructor_magic.h"
++#include "rtc_base/logging.h"
++#include "rtc_base/platform_thread_types.h"
++
++namespace webrtc {
++
++namespace {
++
++class WindowBorderLinux : public WindowBorder,
++                          public SharedXDisplay::XEventHandler {
++ public:
++  explicit WindowBorderLinux();
++  ~WindowBorderLinux() override;
++
++  // WindowBorder interface.
++  void Init(rtc::scoped_refptr<SharedXDisplay> x_display, int screen_num) override;
++  bool CreateForWindow(DesktopCapturer::SourceId source_id) override;
++  bool CreateForScreen(const DesktopRect &window_rect) override;
++  bool IsCreated() override;
++  void Destroy() override;
++  WindowId GetBorderId() override;
++  void OnScreenRectChanged(const DesktopRect &screen_rect) override;
++
++  // SharedXDisplay::XEventHandler interface.
++  bool HandleXEvent(const XEvent& event) override;
++
++ private:
++  bool Create(const DesktopRect &window_rect, Window source_window);
++  void Deinit();
++  Display* display() { return x_display_->display(); }
++  bool prepare();
++  void set_shape_bounding();
++  void allow_input_passthrough();
++  void draw(bool resize);
++
++  rtc::scoped_refptr<SharedXDisplay> x_display_;
++  int screen_num_ = 0;
++  Window root_window_ = 0;
++  XVisualInfo vinfo_ = { 0 };
++  DesktopRect border_rect_;
++  Window border_window_ = 0;
++  Window source_window_ = 0;
++  DesktopRect frame_extents_;
++  cairo_surface_t* surface_ = nullptr;
++  cairo_t* cairo_ = nullptr;
++
++  RTC_DISALLOW_COPY_AND_ASSIGN(WindowBorderLinux);
++};
++
++WindowBorderLinux::WindowBorderLinux() {
++}
++
++WindowBorderLinux::~WindowBorderLinux() {
++  Destroy();
++  Deinit();
++}
++
++void WindowBorderLinux::Init(rtc::scoped_refptr<SharedXDisplay> x_display, int screen_num) {
++  if (x_display_) {
++    RTC_LOG(LS_WARNING) << "Init(" << this << "): Thread=" << rtc::CurrentThreadId();
++    return;
++  }
++
++  RTC_LOG(LS_INFO) << "Init(" << this << "): Thread=" << rtc::CurrentThreadId();
++  x_display_ = x_display;
++  screen_num_ = screen_num;
++  root_window_ = RootWindow(display(), screen_num_);
++
++  // ExposureMask
++  x_display_->AddEventHandler(Expose, this);
++
++  // StructureNotifyMask
++  x_display_->AddEventHandler(MapNotify, this);
++  x_display_->AddEventHandler(ConfigureNotify, this);
++}
++
++bool WindowBorderLinux::CreateForWindow(DesktopCapturer::SourceId source_id) {
++  Window source_window = static_cast<Window>(source_id);
++  DesktopRect window_rect;
++  if (!GetWindowRect(display(), source_window, &window_rect, nullptr)) {
++    RTC_LOG(LS_ERROR) << "Failed to get source window rect.";
++    return false;
++  }
++
++  GetFrameExtents(display(), source_window, &frame_extents_);
++
++  if (!Create(window_rect, source_window)) {
++    return false;
++  }
++
++  return true;
++}
++
++bool WindowBorderLinux::CreateForScreen(const DesktopRect &window_rect) {
++  Window source_window = root_window_;
++  if (!Create(window_rect, source_window)) {
++    return false;
++  }
++
++  return true;
++}
++
++bool WindowBorderLinux::IsCreated() {
++  if (border_window_) {
++    return true;
++  } else {
++    return false;
++  }
++}
++
++void WindowBorderLinux::Destroy() {
++  if (!IsCreated()) {
++    return;
++  }
++
++  if (border_window_) {
++    RTC_LOG(LS_INFO) << "Destroy(" << this << "): Thread=" << rtc::CurrentThreadId() << ", border_window=" << border_window_;
++    XUnmapWindow(display(), border_window_);
++    XDestroyWindow(display(), border_window_);
++    border_window_ = 0;
++  }
++
++  if (cairo_) {
++    cairo_destroy(cairo_);
++    cairo_ = nullptr;
++  }
++
++  if (surface_) {
++    cairo_surface_destroy(surface_);
++    surface_ = nullptr;
++  }
++
++  XFlush(display());
++}
++
++void WindowBorderLinux::Deinit() {
++  if (x_display_) {
++    RTC_LOG(LS_INFO) << "Deinit(" << this << "): Thread=" << rtc::CurrentThreadId();
++    // ExposureMask
++    x_display_->RemoveEventHandler(Expose, this);
++
++    // StructureNotifyMask
++    x_display_->RemoveEventHandler(MapNotify, this);
++    x_display_->RemoveEventHandler(ConfigureNotify, this);
++
++    x_display_ = nullptr;
++  }
++}
++
++WindowId WindowBorderLinux::GetBorderId() {
++  return border_window_;
++}
++
++void WindowBorderLinux::OnScreenRectChanged(const DesktopRect &screen_rect) {
++  if (!IsCreated()) {
++    return;
++  }
++
++  if (border_rect_.equals(screen_rect)) {
++    return;
++  }
++
++  RTC_LOG(LS_INFO) << "OnScreenRectChanged: ("
++                   << border_rect_.left() << ", "
++                   << border_rect_.top() << ") "
++                   << border_rect_.width() << "x"
++                   << border_rect_.height() << " => ("
++                   << screen_rect.left() << ", "
++                   << screen_rect.top() << ") "
++                   << screen_rect.width() << "x"
++                   << screen_rect.height();
++  if (screen_rect.is_empty()) {
++    Destroy();
++    return;
++  }
++
++  border_rect_ = screen_rect;
++  if (root_window_ == source_window_) {
++    XMoveResizeWindow(display(), border_window_, border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height());
++  } else {
++    GetFrameExtents(display(), source_window_, &frame_extents_);
++    XMoveResizeWindow(display(), border_window_, 0, 0, border_rect_.width(), border_rect_.height());
++  }
++  XFlush(display());
++}
++
++bool WindowBorderLinux::HandleXEvent(const XEvent &event) {
++  if (!IsCreated()) {
++    return false;
++  }
++
++  // skip other windows
++  if (event.xany.window != border_window_) {
++    return false;
++  }
++
++  switch (event.type) {
++    case MapNotify:
++      RTC_LOG(LS_INFO) << "HandleXEvent(" << this << "): Thread=" << rtc::CurrentThreadId() << ", type=MapNotify";
++      break;
++
++    case Expose:
++    {
++      XExposeEvent xe = event.xexpose;
++      RTC_LOG(LS_INFO) << "HandleXEvent(" << this << "): Thread=" << rtc::CurrentThreadId() << ", type=Expose"
++          << ", x=" << xe.x << ", y=" << xe.y << ", width=" << xe.width << ", height=" << xe.height;
++      draw(false);
++      break;
++    }
++
++    case ConfigureNotify:
++    {
++      XConfigureEvent xe = event.xconfigure;
++      RTC_LOG(LS_INFO) << "HandleXEvent(" << this << "): Thread=" << rtc::CurrentThreadId() << ", type=ConfigureNotify"
++          << ", x=" << xe.x << ", y=" << xe.y << ", width=" << xe.width << ", height=" << xe.height;
++      draw(true);
++      break;
++    }
++
++    default:
++      RTC_LOG(LS_INFO) << "IgnoreXEvent(" << this << "): Thread=" << rtc::CurrentThreadId() << ", type=" << event.type;
++      break;
++  }
++
++  return true;
++}
++
++bool WindowBorderLinux::Create(const DesktopRect &window_rect, Window source_window) {
++  // check created
++  if (IsCreated()) {
++    RTC_LOG(LS_ERROR) << "Create failed: already created";
++    return false;
++  }
++
++  // check parameter
++  if (window_rect.is_empty()) {
++    RTC_LOG(LS_ERROR) << "Create failed: empty rect";
++    return false;
++  }
++
++  // save border rect
++  border_rect_ = window_rect;
++
++  // save source window
++  source_window_ = source_window;
++
++  if (!XMatchVisualInfo(display(), screen_num_, 32, TrueColor, &vinfo_)) {
++    RTC_LOG(LS_ERROR) << "Create failed: no matched visual info";
++    return false;
++  }
++
++  XSetWindowAttributes attr = { 0 };
++  attr.override_redirect = True;
++  attr.colormap = XCreateColormap(display(), source_window_, vinfo_.visual, AllocNone);
++  attr.border_pixel = 0;
++  attr.background_pixel = 0;
++  attr.event_mask = ExposureMask | StructureNotifyMask;
++
++  // create border window
++  if (source_window_ == root_window_) { // screen capture
++    border_window_ = XCreateWindow(display(), source_window_,
++        border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height(), 0,
++        vinfo_.depth, InputOutput, vinfo_.visual,
++        CWOverrideRedirect | CWColormap | CWBorderPixel | CWBackPixel | CWEventMask, &attr);
++  } else { // window capture
++    border_window_ = XCreateWindow(display(), source_window_,
++        0, 0, border_rect_.width(), border_rect_.height(), 0, // (0, 0)
++        vinfo_.depth, InputOutput, vinfo_.visual,
++        CWOverrideRedirect | CWColormap | CWBorderPixel | CWEventMask, &attr); // without CWBackPixel to make border window transparent
++  }
++
++  if (!border_window_) {
++    RTC_LOG(LS_ERROR) << "Create failed: create window failed";
++    return false;
++  }
++
++  if (!prepare()) {
++    Destroy();
++    return false;
++  }
++
++  XStoreName(display(), border_window_, "wave_linux_border_window");
++  XMapWindow(display(), border_window_);
++  XFlush(display());
++
++  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId()
++                   << ", screen_num=" << screen_num_
++                   << ", root_window=" << root_window_
++                   << ", source_window=" << source_window_
++                   << ", border_window=" << border_window_
++                   << ", rect(" << border_rect_.left() << ", " << border_rect_.top()
++                   << ") " << border_rect_.width() << "x" << border_rect_.height();
++  return true;
++}
++
++bool WindowBorderLinux::prepare() {
++  if (!IsCreated()) {
++    return false;
++  }
++
++  if (cairo_) {
++    cairo_destroy(cairo_);
++    cairo_ = nullptr;
++  }
++
++  if (surface_) {
++    cairo_surface_destroy(surface_);
++    surface_ = nullptr;
++  }
++
++  RTC_LOG(LS_INFO) << "prepare surface: depth=" << vinfo_.depth << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
++  surface_ = cairo_xlib_surface_create(display(), border_window_, vinfo_.visual, border_rect_.width(), border_rect_.height());
++  if (surface_ == nullptr) {
++    RTC_LOG(LS_ERROR) << "cairo_xlib_surface_create failed";
++    return false;
++  }
++
++  cairo_ = cairo_create(surface_);
++  if (cairo_ == nullptr) {
++    RTC_LOG(LS_ERROR) << "cairo_create failed";
++    return false;
++  }
++
++  set_shape_bounding();
++  allow_input_passthrough();
++
++  return true;
++}
++
++void WindowBorderLinux::allow_input_passthrough() {
++  if (!IsCreated()) {
++    return;
++  }
++
++  RTC_LOG(LS_INFO) << "allow_input_passthrough";
++  XserverRegion region = XFixesCreateRegion(display(), nullptr, 0);
++  XFixesSetWindowShapeRegion(display(), border_window_, ShapeInput, 0, 0, region); // clear to empty
++  XFixesDestroyRegion(display(), region);
++
++  XFlush(display());
++}
++
++void WindowBorderLinux::set_shape_bounding() {
++  if (!IsCreated()) {
++    return;
++  }
++
++  if (source_window_ == root_window_) {
++    XFixesSetWindowShapeRegion(display(), border_window_, ShapeBounding, 0, 0, 0); // default is whole
++  } else {
++    RTC_LOG(LS_INFO) << "set_shape_bounding: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
++    XRectangle xrect_out;
++    xrect_out.x = frame_extents_.left();
++    xrect_out.y = frame_extents_.top();
++    xrect_out.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right();
++    xrect_out.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom();
++    XserverRegion region_out = XFixesCreateRegion(display(), &xrect_out, 1);
++
++    XRectangle xrect_in;
++    xrect_in.x = frame_extents_.left() + kBorderWidth;
++    xrect_in.y = frame_extents_.top() + kBorderWidth;
++    xrect_in.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right() - kBorderWidth * 2;
++    xrect_in.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom() - kBorderWidth * 2;
++    XserverRegion region_in = XFixesCreateRegion(display(), &xrect_in, 1);
++
++    XserverRegion region_border = XFixesCreateRegion (display(), nullptr, 0);
++    XFixesSubtractRegion(display(), region_border, region_out, region_in);
++    XFixesSetWindowShapeRegion(display(), border_window_, ShapeBounding, 0, 0, region_border);
++
++    XFixesDestroyRegion(display(), region_border);
++    XFixesDestroyRegion(display(), region_out);
++    XFixesDestroyRegion(display(), region_in);
++  }
++
++  XFlush(display());
++}
++
++void WindowBorderLinux::draw(bool resize) {
++  if (!IsCreated() || cairo_ == nullptr) {
++    return;
++  }
++
++  if (resize) {
++    RTC_LOG(LS_INFO) << "resize surface: width=" << border_rect_.width() << ", height=" << border_rect_.height();
++    cairo_xlib_surface_set_size(surface_, border_rect_.width(), border_rect_.height());
++    set_shape_bounding();
++  }
++
++  RTC_LOG(LS_INFO) << "draw border: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
++  cairo_set_operator(cairo_, CAIRO_OPERATOR_OVER); // default is over
++  cairo_set_line_width(cairo_, kBorderWidth);
++  cairo_set_source_rgba(cairo_, (double)kBorderColorR / 0xff, (double)kBorderColorG / 0xff, (double)kBorderColorB / 0xff, 1.0); // border is opaque
++  cairo_rectangle(cairo_,
++    frame_extents_.left() + kBorderWidth / 2.0,
++    frame_extents_.top() + kBorderWidth / 2.0,
++    border_rect_.width() - frame_extents_.left() - frame_extents_.right() - kBorderWidth,
++    border_rect_.height() - frame_extents_.top() - frame_extents_.bottom() - kBorderWidth);
++  cairo_stroke(cairo_);
++}
++
++}  // namespace
++
++// static
++std::unique_ptr<WindowBorder> DesktopCapturer::CreateWindowBorder() {
++  return std::unique_ptr<WindowBorder>(new WindowBorderLinux());
++}
++
++}  // namespace webrtc
