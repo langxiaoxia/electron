@@ -4,3 +4,4 @@ add_window_border.patch
 add_wps_full_screen_handler.patch
 fix_ppt_full_screen_handler.patch
 add_window_border_on_linux.patch
+fix_window_border_on_linux.patch

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Wed, 26 Jan 2022 14:19:13 +0800
+Subject: fix_window_border_on_linux
+
+
+diff --git a/modules/desktop_capture/window_border_linux.cc b/modules/desktop_capture/window_border_linux.cc
+index 58fe1e089d53bda3d7d48b508d47ef16515e7747..c01691cd39b233839b15217cc0d388f980ac79fa 100644
+--- a/modules/desktop_capture/window_border_linux.cc
++++ b/modules/desktop_capture/window_border_linux.cc
+@@ -224,7 +224,7 @@ bool WindowBorderLinux::HandleXEvent(const XEvent &event) {
+       XExposeEvent xe = event.xexpose;
+       RTC_LOG(LS_INFO) << "HandleXEvent(" << this << "): Thread=" << rtc::CurrentThreadId() << ", type=Expose"
+           << ", x=" << xe.x << ", y=" << xe.y << ", width=" << xe.width << ", height=" << xe.height;
+-      draw(false);
++      draw(true); // resize here to fix 800x600 => 1920x1080 case.
+       break;
+     }
+ 
+@@ -390,6 +390,8 @@ void WindowBorderLinux::set_shape_bounding() {
+     XFixesDestroyRegion(display(), region_border);
+     XFixesDestroyRegion(display(), region_out);
+     XFixesDestroyRegion(display(), region_in);
++
++    XRaiseWindow(display(), border_window_); // raise here to fix Teams maximize case.
+   }
+ 
+   XFlush(display());
