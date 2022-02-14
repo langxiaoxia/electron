@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 14 Feb 2022 16:53:53 +0800
+Subject: pause_iconic_for_window_capturer
+
+
+diff --git a/modules/desktop_capture/desktop_capturer.h b/modules/desktop_capture/desktop_capturer.h
+index 83f141d26da45e0cdfd82156e47e5ba46c493bc7..b5da3ae3d52466500be0e8c3cdf5af520e386ee4 100644
+--- a/modules/desktop_capture/desktop_capturer.h
++++ b/modules/desktop_capture/desktop_capturer.h
+@@ -37,6 +37,8 @@ class RTC_EXPORT DesktopCapturer {
+     // The frame was captured successfully.
+     SUCCESS,
+ 
++    PAUSE_ICONIC, //+by xxlang@2022-01-28
++
+     // There was a temporary error. The caller should continue calling
+     // CaptureFrame(), in the expectation that it will eventually recover.
+     ERROR_TEMPORARY,
+diff --git a/modules/desktop_capture/linux/window_capturer_x11.cc b/modules/desktop_capture/linux/window_capturer_x11.cc
+index 967c2441ab8445d2d646e371d2e7761862e17ab0..7b947db5af385d2c4c20f03aadf775559be9b5b5 100644
+--- a/modules/desktop_capture/linux/window_capturer_x11.cc
++++ b/modules/desktop_capture/linux/window_capturer_x11.cc
+@@ -177,10 +177,14 @@ void WindowCapturerX11::CaptureFrame() {
+   }
+ 
+   if (GetWindowState(&atom_cache_, selected_window_) == IconicState) {
++#if 0
+     // Window is in minimized. Return a 1x1 frame as same as OSX/Win does.
+     std::unique_ptr<DesktopFrame> frame(
+         new BasicDesktopFrame(DesktopSize(1, 1)));
+     callback_->OnCaptureResult(Result::SUCCESS, std::move(frame));
++#else
++    callback_->OnCaptureResult(Result::PAUSE_ICONIC, nullptr); //+by xxlang@2022-01-28
++#endif
+     window_border_->Destroy(); //+by xxlang@2022-01-04
+     return;
+   }
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index a9ae83cf4751e7eae8af6fa3a9a4198741f9e690..3d3ade6dafa239189eb516a71f49fd2d2f52be44 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -203,6 +203,12 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+   // during the transition of full screen mode on/off.
+   if (original_rect.is_empty() ||
+       !window_capture_helper_.IsWindowVisibleOnCurrentDesktop(window_)) {
++    //+by xxlang@2022-01-28 {
++    if (IsIconic(window_)) {
++      return {Result::PAUSE_ICONIC, nullptr};
++    }
++    //+by xxlang@2022-01-28 }
++
+     std::unique_ptr<DesktopFrame> frame(
+         new BasicDesktopFrame(DesktopSize(1, 1)));
+ 
+diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
+index 1ccb391688e34c1d9912362953a3482237ee71f0..e3f2ef07c064f61fb7422ffa0c711be3e7600e86 100644
+--- a/modules/desktop_capture/window_capturer_mac.mm
++++ b/modules/desktop_capture/window_capturer_mac.mm
+@@ -223,9 +223,14 @@ explicit WindowCapturerMac(
+ 
+   std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindow(on_screen_window);
+   if (!frame) {
+-    if (IsWindowOnScreen(on_screen_window)) {
+-      RTC_LOG(LS_WARNING) << "Temporarily failed to capture window.";
++    //+by xxlang@2022-01-18 {
++    if (!IsWindowOnScreen(on_screen_window)) {
++      callback_->OnCaptureResult(Result::PAUSE_ICONIC, nullptr);
++      return;
+     }
++    //+by xxlang@2022-01-18 }
++
++    RTC_LOG(LS_WARNING) << "Temporarily failed to capture window.";
+     callback_->OnCaptureResult(Result::ERROR_TEMPORARY, nullptr);
+     return;
+   }

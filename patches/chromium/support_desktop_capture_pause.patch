@@ -1,0 +1,560 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 14 Feb 2022 16:41:00 +0800
+Subject: support_desktop_capture_pause
+
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index 895cf5a17fc581e200a705672c6eaef19ffc2a8d..fa1d046e86b5a25d5c563c93f42ff4cfb9da45f0 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -195,6 +195,8 @@ class DesktopCaptureDevice::Core : public webrtc::DesktopCapturer::Callback {
+   // first capture permanent error.
+   bool first_permanent_error_logged;
+ 
++  bool capture_paused_; //+by xxlang@2022-01-28
++
+   // The type of the capturer.
+   DesktopMediaID::Type capturer_type_;
+ 
+@@ -223,6 +225,7 @@ DesktopCaptureDevice::Core::Core(
+       capture_in_progress_(false),
+       first_capture_returned_(false),
+       first_permanent_error_logged(false),
++      capture_paused_(false), //+by xxlang@2022-01-28
+       capturer_type_(type) {}
+ 
+ DesktopCaptureDevice::Core::~Core() {
+@@ -319,12 +322,29 @@ void DesktopCaptureDevice::Core::OnCaptureResult(
+                        FROM_HERE, "The desktop capturer has failed.");
+       return;
+     }
++
++    //+by xxlang@2022-01-28 {
++    if (result == webrtc::DesktopCapturer::Result::PAUSE_ICONIC && !capture_paused_) {
++      VLOG(0) << "capture paused";
++      capture_paused_ = true;
++      client_->OnPaused();
++    }
++    //+by xxlang@2022-01-28 }
++
+     // Continue capturing frames in the temporary error case.
+     ScheduleNextCaptureFrame();
+     return;
+   }
+   DCHECK(frame);
+ 
++  //+by xxlang@2022-01-28 {
++  if (capture_paused_) {
++    VLOG(0) << "capture resumed";
++    capture_paused_ = false;
++    client_->OnResumed();
++  }
++  //+by xxlang@2022-01-28 }
++
+   base::TimeDelta capture_time(
+       base::TimeDelta::FromMilliseconds(frame->capture_time_ms()));
+ 
+diff --git a/content/browser/renderer_host/media/video_capture_controller.cc b/content/browser/renderer_host/media/video_capture_controller.cc
+index 575f9f7526df5feca765de063e39b4140e650de4..ee15b296a34641a30439c6c8ae9c87a327aeb9ec 100644
+--- a/content/browser/renderer_host/media/video_capture_controller.cc
++++ b/content/browser/renderer_host/media/video_capture_controller.cc
+@@ -135,6 +135,18 @@ void CallOnStartedUsingGpuDecode(VideoCaptureControllerEventHandler* client,
+   client->OnStartedUsingGpuDecode(id);
+ }
+ 
++//+by xxlang@2022-01-28 {
++void CallOnPaused(VideoCaptureControllerEventHandler* client,
++                   const VideoCaptureControllerID& id) {
++  client->OnPaused(id);
++}
++
++void CallOnResumed(VideoCaptureControllerEventHandler* client,
++                   const VideoCaptureControllerID& id) {
++  client->OnResumed(id);
++}
++//+by xxlang@2022-01-28 }
++
+ }  // anonymous namespace
+ 
+ struct VideoCaptureController::ControllerClient {
+@@ -683,6 +695,22 @@ void VideoCaptureController::OnStopped() {
+   // been deferred because a client was still consuming a retired buffer.
+ }
+ 
++//+by xxlang@2022-01-28 {
++void VideoCaptureController::OnPaused() {
++  DCHECK_CURRENTLY_ON(BrowserThread::IO);
++  EmitLogMessage(__func__, 0);
++  state_ = blink::VIDEO_CAPTURE_STATE_PAUSED;
++  PerformForClientsWithOpenSession(base::BindRepeating(&CallOnPaused));
++}
++
++void VideoCaptureController::OnResumed() {
++  DCHECK_CURRENTLY_ON(BrowserThread::IO);
++  EmitLogMessage(__func__, 0);
++  state_ = blink::VIDEO_CAPTURE_STATE_RESUMED;
++  PerformForClientsWithOpenSession(base::BindRepeating(&CallOnResumed));
++}
++//+by xxlang@2022-01-28 }
++
+ void VideoCaptureController::OnDeviceLaunched(
+     std::unique_ptr<LaunchedVideoCaptureDevice> device) {
+   DCHECK_CURRENTLY_ON(BrowserThread::IO);
+diff --git a/content/browser/renderer_host/media/video_capture_controller.h b/content/browser/renderer_host/media/video_capture_controller.h
+index 8b5b93e3a91f92b0ac029dc353315699d0dd9977..1537c6b1f34173f26b7cf5424da561912f5d3735 100644
+--- a/content/browser/renderer_host/media/video_capture_controller.h
++++ b/content/browser/renderer_host/media/video_capture_controller.h
+@@ -125,6 +125,10 @@ class CONTENT_EXPORT VideoCaptureController
+   void OnStarted() override;
+   void OnStartedUsingGpuDecode() override;
+   void OnStopped() override;
++  //+by xxlang@2022-01-28 {
++  void OnPaused() override;
++  void OnResumed() override;
++  //+by xxlang@2022-01-28 }
+ 
+   // Implementation of VideoCaptureDeviceLauncher::Callbacks interface:
+   void OnDeviceLaunched(
+diff --git a/content/browser/renderer_host/media/video_capture_controller_event_handler.h b/content/browser/renderer_host/media/video_capture_controller_event_handler.h
+index f772c6adf67df059f427861436e747216b3c6a93..b8920ba440e7832f1561dffeacd8c1f734a014fa 100644
+--- a/content/browser/renderer_host/media/video_capture_controller_event_handler.h
++++ b/content/browser/renderer_host/media/video_capture_controller_event_handler.h
+@@ -72,6 +72,11 @@ class CONTENT_EXPORT VideoCaptureControllerEventHandler {
+ 
+   virtual void OnStartedUsingGpuDecode(const VideoCaptureControllerID& id) = 0;
+ 
++  //+by xxlang@2022-01-28 {
++  virtual void OnPaused(const VideoCaptureControllerID& id) = 0;
++  virtual void OnResumed(const VideoCaptureControllerID& id) = 0;
++  //+by xxlang@2022-01-28 }
++
+  protected:
+   virtual ~VideoCaptureControllerEventHandler() {}
+ };
+diff --git a/content/browser/renderer_host/media/video_capture_host.cc b/content/browser/renderer_host/media/video_capture_host.cc
+index cf98b8ccb549a208d71ddad5197961f38d9c2d94..69df0b6e92dd2c768fe0ac5b9447f1b26003df78 100644
+--- a/content/browser/renderer_host/media/video_capture_host.cc
++++ b/content/browser/renderer_host/media/video_capture_host.cc
+@@ -189,6 +189,32 @@ void VideoCaptureHost::OnStarted(
+ void VideoCaptureHost::OnStartedUsingGpuDecode(
+     const VideoCaptureControllerID& id) {}
+ 
++//+by xxlang@2022-01-28 {
++void VideoCaptureHost::OnPaused(const VideoCaptureControllerID& controller_id) {
++  DVLOG(0) << __func__;
++  DCHECK_CURRENTLY_ON(BrowserThread::IO);
++  if (controllers_.find(controller_id) == controllers_.end())
++    return;
++
++  if (base::Contains(device_id_to_observer_map_, controller_id)) {
++    device_id_to_observer_map_[controller_id]->OnStateChanged(
++        media::mojom::VideoCaptureState::PAUSED);
++  }
++}
++
++void VideoCaptureHost::OnResumed(const VideoCaptureControllerID& controller_id) {
++  DVLOG(0) << __func__;
++  DCHECK_CURRENTLY_ON(BrowserThread::IO);
++  if (controllers_.find(controller_id) == controllers_.end())
++    return;
++
++  if (base::Contains(device_id_to_observer_map_, controller_id)) {
++    device_id_to_observer_map_[controller_id]->OnStateChanged(
++        media::mojom::VideoCaptureState::RESUMED);
++  }
++}
++//+by xxlang@2022-01-28 }
++
+ void VideoCaptureHost::Start(
+     const base::UnguessableToken& device_id,
+     const base::UnguessableToken& session_id,
+diff --git a/content/browser/renderer_host/media/video_capture_host.h b/content/browser/renderer_host/media/video_capture_host.h
+index 1bf872dde2512e1452660a4e5ede9ffaad11f225..440dbc66421f3046615debbd23ea49fb71ce3783 100644
+--- a/content/browser/renderer_host/media/video_capture_host.h
++++ b/content/browser/renderer_host/media/video_capture_host.h
+@@ -69,6 +69,10 @@ class CONTENT_EXPORT VideoCaptureHost
+   void OnEnded(const VideoCaptureControllerID& id) override;
+   void OnStarted(const VideoCaptureControllerID& id) override;
+   void OnStartedUsingGpuDecode(const VideoCaptureControllerID& id) override;
++  //+by xxlang@2022-01-28 {
++  void OnPaused(const VideoCaptureControllerID& id) override;
++  void OnResumed(const VideoCaptureControllerID& id) override;
++  //+by xxlang@2022-01-28 }
+ 
+   // media::mojom::VideoCaptureHost implementation
+   void Start(const base::UnguessableToken& device_id,
+diff --git a/media/capture/video/video_capture_device.h b/media/capture/video/video_capture_device.h
+index fdc1197c3a838bd6176c42b9b8c0d596fe479ae2..2bdd5ba32848314d74cbad61648ccc7db49b01b7 100644
+--- a/media/capture/video/video_capture_device.h
++++ b/media/capture/video/video_capture_device.h
+@@ -260,6 +260,11 @@ class CAPTURE_EXPORT VideoCaptureDevice
+ 
+     // VideoCaptureDevice reports it's successfully started.
+     virtual void OnStarted() = 0;
++
++    //+by xxlang@2022-01-28 {
++    virtual void OnPaused() = 0;
++    virtual void OnResumed() = 0;
++    //+by xxlang@2022-01-28 }
+   };
+ 
+   ~VideoCaptureDevice() override;
+diff --git a/media/capture/video/video_capture_device_client.cc b/media/capture/video/video_capture_device_client.cc
+index 47ea404600eecfd7746b9b118a7926355ea7701d..9a8b0d21adebad90a543b5754f25b9d3f9edf6bb 100644
+--- a/media/capture/video/video_capture_device_client.cc
++++ b/media/capture/video/video_capture_device_client.cc
+@@ -665,6 +665,18 @@ void VideoCaptureDeviceClient::OnStarted() {
+   receiver_->OnStarted();
+ }
+ 
++//+by xxlang@2022-01-28 {
++void VideoCaptureDeviceClient::OnPaused() {
++  DVLOG(0) << __func__;
++  receiver_->OnPaused();
++}
++
++void VideoCaptureDeviceClient::OnResumed() {
++  DVLOG(0) << __func__;
++  receiver_->OnResumed();
++}
++//+by xxlang@2022-01-28 }
++
+ double VideoCaptureDeviceClient::GetBufferPoolUtilization() const {
+   return buffer_pool_->GetBufferPoolUtilization();
+ }
+diff --git a/media/capture/video/video_capture_device_client.h b/media/capture/video/video_capture_device_client.h
+index 07d39c57cb5023332fe376a0ee840dab991fc6e5..f7cb72d132b274ff0faacd6a81742210de5b74b7 100644
+--- a/media/capture/video/video_capture_device_client.h
++++ b/media/capture/video/video_capture_device_client.h
+@@ -108,6 +108,10 @@ class CAPTURE_EXPORT VideoCaptureDeviceClient
+   void OnFrameDropped(VideoCaptureFrameDropReason reason) override;
+   void OnLog(const std::string& message) override;
+   void OnStarted() override;
++  //+by xxlang@2022-01-28 {
++  void OnPaused() override;
++  void OnResumed() override;
++  //+by xxlang@2022-01-28 }
+   double GetBufferPoolUtilization() const override;
+ 
+  private:
+diff --git a/media/capture/video/video_frame_receiver.h b/media/capture/video/video_frame_receiver.h
+index 87246d2fc885191b4c808c4974c08e98d5fa6b2f..fabbde94dbbaa54ce04e88f65dc0e58ad447f0ce 100644
+--- a/media/capture/video/video_frame_receiver.h
++++ b/media/capture/video/video_frame_receiver.h
+@@ -80,6 +80,10 @@ class CAPTURE_EXPORT VideoFrameReceiver {
+   virtual void OnStarted() = 0;
+   virtual void OnStartedUsingGpuDecode() = 0;
+   virtual void OnStopped() = 0;
++  //+by xxlang@2022-01-28 {
++  virtual void OnPaused() = 0;
++  virtual void OnResumed() = 0;
++  //+by xxlang@2022-01-28 }
+ };
+ 
+ }  // namespace media
+diff --git a/media/capture/video/video_frame_receiver_on_task_runner.cc b/media/capture/video/video_frame_receiver_on_task_runner.cc
+index db8990cf1c70668dd209bf2eb09462223ef84119..2aeece8226e2c013295994befc8739b088ecf8a4 100644
+--- a/media/capture/video/video_frame_receiver_on_task_runner.cc
++++ b/media/capture/video/video_frame_receiver_on_task_runner.cc
+@@ -74,4 +74,18 @@ void VideoFrameReceiverOnTaskRunner::OnStopped() {
+       FROM_HERE, base::BindOnce(&VideoFrameReceiver::OnStopped, receiver_));
+ }
+ 
++//+by xxlang@2022-01-28 {
++void VideoFrameReceiverOnTaskRunner::OnPaused() {
++  DVLOG(0) << __func__;
++  task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&VideoFrameReceiver::OnPaused, receiver_));
++}
++
++void VideoFrameReceiverOnTaskRunner::OnResumed() {
++  DVLOG(0) << __func__;
++  task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&VideoFrameReceiver::OnResumed, receiver_));
++}
++//+by xxlang@2022-01-28 }
++
+ }  // namespace media
+diff --git a/media/capture/video/video_frame_receiver_on_task_runner.h b/media/capture/video/video_frame_receiver_on_task_runner.h
+index ff2d8113d3a123a262f3cb38fa871882fcc84376..02306b918163249784844cc9eaf8bc97b6756af3 100644
+--- a/media/capture/video/video_frame_receiver_on_task_runner.h
++++ b/media/capture/video/video_frame_receiver_on_task_runner.h
+@@ -35,6 +35,10 @@ class CAPTURE_EXPORT VideoFrameReceiverOnTaskRunner
+   void OnStarted() override;
+   void OnStartedUsingGpuDecode() override;
+   void OnStopped() override;
++  //+by xxlang@2022-01-28 {
++  void OnPaused() override;
++  void OnResumed() override;
++  //+by xxlang@2022-01-28 }
+ 
+  private:
+   const base::WeakPtr<VideoFrameReceiver> receiver_;
+diff --git a/media/capture/video_capturer_source.h b/media/capture/video_capturer_source.h
+index 9c46503617ce976bf08127bab2f9202194eb798a..242a2d872c52901115c571941ac3accca81ec02b 100644
+--- a/media/capture/video_capturer_source.h
++++ b/media/capture/video_capturer_source.h
+@@ -57,7 +57,7 @@ class CAPTURE_EXPORT VideoCapturerSource {
+   using VideoCaptureDeviceFormatsCB =
+       base::OnceCallback<void(const media::VideoCaptureFormats&)>;
+ 
+-  using RunningCallback = base::RepeatingCallback<void(bool)>;
++  using RunningCallback = base::RepeatingCallback<void(bool, int)>; //*by xxlang@2022-01-28
+ 
+   // Returns formats that are preferred and can currently be used. May be empty
+   // if no formats are available or known.
+diff --git a/services/video_capture/receiver_mojo_to_media_adapter.cc b/services/video_capture/receiver_mojo_to_media_adapter.cc
+index 012ce40cbbc7ac6ebd7c5c07ed88504ccd7581f8..1e8f0e4a75488ad720c01294522aa6243bc0f57e 100644
+--- a/services/video_capture/receiver_mojo_to_media_adapter.cc
++++ b/services/video_capture/receiver_mojo_to_media_adapter.cc
+@@ -86,4 +86,14 @@ void ReceiverMojoToMediaAdapter::OnStopped() {
+   video_frame_handler_->OnStopped();
+ }
+ 
++//+by xxlang@2022-01-28 {
++void ReceiverMojoToMediaAdapter::OnPaused() {
++  VLOG(0) << __func__;
++}
++
++void ReceiverMojoToMediaAdapter::OnResumed() {
++  VLOG(0) << __func__;
++}
++//+by xxlang@2022-01-28 }
++
+ }  // namespace video_capture
+diff --git a/services/video_capture/receiver_mojo_to_media_adapter.h b/services/video_capture/receiver_mojo_to_media_adapter.h
+index 1802d30193490b5f1e11eae1f1c8a5f66ec27798..8d7fc106ea3ee50d386767f2a346daa66afdf672 100644
+--- a/services/video_capture/receiver_mojo_to_media_adapter.h
++++ b/services/video_capture/receiver_mojo_to_media_adapter.h
+@@ -34,6 +34,10 @@ class ReceiverMojoToMediaAdapter : public media::VideoFrameReceiver {
+   void OnStarted() override;
+   void OnStartedUsingGpuDecode() override;
+   void OnStopped() override;
++  //+by xxlang@2022-01-28 {
++  void OnPaused() override;
++  void OnResumed() override;
++  //+by xxlang@2022-01-28 }
+ 
+  private:
+   mojo::Remote<mojom::VideoFrameHandler> video_frame_handler_;
+diff --git a/third_party/blink/renderer/modules/mediacapturefromelement/canvas_capture_handler.cc b/third_party/blink/renderer/modules/mediacapturefromelement/canvas_capture_handler.cc
+index 10d6c6aebf4b37885a6d49b0936805428950d1b0..13d516bf152be4ea73bd2e4cd39fae4d4e93d497 100644
+--- a/third_party/blink/renderer/modules/mediacapturefromelement/canvas_capture_handler.cc
++++ b/third_party/blink/renderer/modules/mediacapturefromelement/canvas_capture_handler.cc
+@@ -240,7 +240,7 @@ void CanvasCaptureHandler::StartVideoCapture(
+   delegate_.reset(new CanvasCaptureHandlerDelegate(new_frame_callback));
+   DCHECK(delegate_);
+   ask_for_new_frame_ = true;
+-  running_callback.Run(true);
++  running_callback.Run(true, -1); //*by xxlang@2022-01-28
+ }
+ 
+ void CanvasCaptureHandler::RequestRefreshFrame() {
+diff --git a/third_party/blink/renderer/modules/mediacapturefromelement/html_video_element_capturer_source.cc b/third_party/blink/renderer/modules/mediacapturefromelement/html_video_element_capturer_source.cc
+index 9d34eb8c3ff4b69945a0b1d6240149fd528e97da..f3e508dac3fdf0178e53e6f0809a04e2d400c07e 100644
+--- a/third_party/blink/renderer/modules/mediacapturefromelement/html_video_element_capturer_source.cc
++++ b/third_party/blink/renderer/modules/mediacapturefromelement/html_video_element_capturer_source.cc
+@@ -80,7 +80,7 @@ void HtmlVideoElementCapturerSource::StartCapture(
+ 
+   running_callback_ = running_callback;
+   if (!web_media_player_ || !web_media_player_->HasVideo()) {
+-    running_callback_.Run(false);
++    running_callback_.Run(false, -1); //*by xxlang@2022-01-28
+     return;
+   }
+ 
+@@ -91,7 +91,7 @@ void HtmlVideoElementCapturerSource::StartCapture(
+                std::min(static_cast<float>(media::limits::kMaxFramesPerSecond),
+                         params.requested_format.frame_rate));
+ 
+-  running_callback_.Run(true);
++  running_callback_.Run(true, -1); //*by xxlang@2022-01-28
+   task_runner_->PostTask(
+       FROM_HERE, WTF::Bind(&HtmlVideoElementCapturerSource::sendNewFrame,
+                            weak_factory_.GetWeakPtr()));
+diff --git a/third_party/blink/renderer/modules/mediastream/local_video_capturer_source.cc b/third_party/blink/renderer/modules/mediastream/local_video_capturer_source.cc
+index 10437a6e1c50f85564d16559f2b07622d1f8ef0c..00aebbf58381965e88b3c9997eb289f1c94f09b6 100644
+--- a/third_party/blink/renderer/modules/mediastream/local_video_capturer_source.cc
++++ b/third_party/blink/renderer/modules/mediastream/local_video_capturer_source.cc
+@@ -101,13 +101,14 @@ void LocalVideoCapturerSource::OnStateUpdate(blink::VideoCaptureState state) {
+     OnLog("LocalVideoCapturerSource::OnStateUpdate discarding state update.");
+     return;
+   }
++  VLOG(0) << __func__ << ": state=" << state;
+   auto* frame = LocalFrame::FromFrameToken(frame_token_);
+   switch (state) {
+     case VIDEO_CAPTURE_STATE_STARTED:
+       OnLog(
+           "LocalVideoCapturerSource::OnStateUpdate signaling to "
+           "consumer that source is now running.");
+-      running_callback_.Run(true);
++      running_callback_.Run(true, -1); //*by xxlang@2022-01-28
+       break;
+ 
+     case VIDEO_CAPTURE_STATE_STOPPING:
+@@ -123,14 +124,28 @@ void LocalVideoCapturerSource::OnStateUpdate(blink::VideoCaptureState state) {
+       OnLog(
+           "LocalVideoCapturerSource::OnStateUpdate signaling to "
+           "consumer that source is no longer running.");
+-      running_callback_.Run(false);
++      running_callback_.Run(false, -1); //*by xxlang@2022-01-28
+       break;
+ 
+     case VIDEO_CAPTURE_STATE_STARTING:
++      // Not applicable to reporting on device starts or errors.
++      break;
++
++    //+by xxlang@2022-01-28 {
+     case VIDEO_CAPTURE_STATE_PAUSED:
++      OnLog(
++          "LocalVideoCapturerSource::OnStateUpdate signaling to "
++          "consumer that source is now paused.");
++      running_callback_.Run(true, 1);
++      break;
++
+     case VIDEO_CAPTURE_STATE_RESUMED:
+-      // Not applicable to reporting on device starts or errors.
++      OnLog(
++          "LocalVideoCapturerSource::OnStateUpdate signaling to "
++          "consumer that source is now resumed.");
++      running_callback_.Run(true, 0);
+       break;
++    //+by xxlang@2022-01-28 }
+   }
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.cc b/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.cc
+index 64f2d1c5ef4215d0925c9d6ea46e7f2c839cf841..32eb82629e23681eafcce0064f46864ee6b77237 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.cc
+@@ -125,7 +125,7 @@ void MediaStreamVideoCapturerSource::StopSourceForRestartImpl() {
+   // Force state update for nondevice sources, since they do not
+   // automatically update state after StopCapture().
+   if (device().type == mojom::blink::MediaStreamType::NO_SERVICE)
+-    OnRunStateChanged(capture_params_, false);
++    OnRunStateChanged(capture_params_, false, -1); //*by xxlang@2022-01-28
+ }
+ 
+ void MediaStreamVideoCapturerSource::RestartSourceImpl(
+@@ -178,8 +178,9 @@ MediaStreamVideoCapturerSource::GetWeakPtr() const {
+ 
+ void MediaStreamVideoCapturerSource::OnRunStateChanged(
+     const media::VideoCaptureParams& new_capture_params,
+-    bool is_running) {
++    bool is_running, int muted_state) { //*by xxlang@2022-01-28
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
++  VLOG(0) << __func__ << ": state=" << state_ << ", is_running=" << is_running << ", muted_state=" << muted_state;
+   switch (state_) {
+     case STARTING:
+       source_->OnLog("MediaStreamVideoCapturerSource sending OnStartDone");
+@@ -197,6 +198,10 @@ void MediaStreamVideoCapturerSource::OnRunStateChanged(
+       if (!is_running) {
+         state_ = STOPPED;
+         StopSource();
++      //+by xxlang@2022-01-28 {
++      } else if (muted_state >= 0) {
++        SetMutedState(muted_state > 0 ? true : false);
++      //+by xxlang@2022-01-28 }
+       }
+       break;
+     case STOPPING_FOR_RESTART:
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.h b/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.h
+index 30490e4161bf4c93916e2a9eb207b7c0f8c70c74..c176225aec4cad16dfc5a28163863e69af9bb922 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.h
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_video_capturer_source.h
+@@ -86,7 +86,7 @@ class MODULES_EXPORT MediaStreamVideoCapturerSource
+ 
+   // Method to bind as RunningCallback in VideoCapturerSource::StartCapture().
+   void OnRunStateChanged(const media::VideoCaptureParams& new_capture_params,
+-                         bool is_running);
++                         bool is_running, int muted_state); //*by xxlang@2022-01-28
+ 
+   mojom::blink::MediaStreamDispatcherHost* GetMediaStreamDispatcherHost();
+ 
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_video_source.cc b/third_party/blink/renderer/modules/mediastream/media_stream_video_source.cc
+index 9c4561cf5172271404c3a71deba72c32664efb27..0947e3f1ecc1fdc52f943f64f80be17e75937c11 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_video_source.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_video_source.cc
+@@ -465,7 +465,7 @@ void MediaStreamVideoSource::StartFrameMonitoring() {
+ 
+ void MediaStreamVideoSource::SetReadyState(
+     WebMediaStreamSource::ReadyState state) {
+-  DVLOG(3) << "MediaStreamVideoSource::SetReadyState state " << state;
++  VLOG(0) << "MediaStreamVideoSource::SetReadyState state=" << state;
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+   if (!Owner().IsNull())
+     Owner().SetReadyState(state);
+@@ -474,7 +474,7 @@ void MediaStreamVideoSource::SetReadyState(
+ }
+ 
+ void MediaStreamVideoSource::SetMutedState(bool muted_state) {
+-  DVLOG(3) << "MediaStreamVideoSource::SetMutedState state=" << muted_state;
++  VLOG(0) << "MediaStreamVideoSource::SetMutedState state=" << muted_state;
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+   if (!Owner().IsNull()) {
+     Owner().SetReadyState(muted_state ? WebMediaStreamSource::kReadyStateMuted
+diff --git a/third_party/blink/renderer/modules/mediastream/video_track_adapter.cc b/third_party/blink/renderer/modules/mediastream/video_track_adapter.cc
+index c466b90546ae9b0ab8509378b2e593896dae9325..64e40674fd09ef9b3629d2574e937041deb6154f 100644
+--- a/third_party/blink/renderer/modules/mediastream/video_track_adapter.cc
++++ b/third_party/blink/renderer/modules/mediastream/video_track_adapter.cc
+@@ -832,6 +832,7 @@ void VideoTrackAdapter::CheckFramesReceivedOnIO(
+ 
+   bool muted_state = old_frame_counter_snapshot == frame_counter_;
+   if (muted_state_ != muted_state) {
++    VLOG(0) << "muted_state changed: frame_counter " << old_frame_counter_snapshot << " => " << frame_counter_;
+     set_muted_state_callback.Run(muted_state);
+     muted_state_ = muted_state;
+     if (muted_state_) {
+diff --git a/third_party/blink/renderer/platform/exported/mediastream/web_media_stream_source.cc b/third_party/blink/renderer/platform/exported/mediastream/web_media_stream_source.cc
+index 13a01394b65a053ac710a8d434e37f1daa934459..9a7d47ec74f49b07deee976b99da0067bfa481e4 100644
+--- a/third_party/blink/renderer/platform/exported/mediastream/web_media_stream_source.cc
++++ b/third_party/blink/renderer/platform/exported/mediastream/web_media_stream_source.cc
+@@ -84,6 +84,7 @@ WebMediaStreamSource::Type WebMediaStreamSource::GetType() const {
+ 
+ void WebMediaStreamSource::SetReadyState(ReadyState state) {
+   DCHECK(!private_.IsNull());
++  VLOG(0) << __func__  << ": id=" << Id().Ascii() << ", state=" << state;
+   private_->SetReadyState(static_cast<MediaStreamSource::ReadyState>(state));
+ }
+ 
+diff --git a/third_party/blink/renderer/platform/exported/mediastream/web_platform_media_stream_source.cc b/third_party/blink/renderer/platform/exported/mediastream/web_platform_media_stream_source.cc
+index 00f4a5474b510e9586fcaf504121f1113898615e..d4eddeacfc3061dbba17f007ff7518237afc6544 100644
+--- a/third_party/blink/renderer/platform/exported/mediastream/web_platform_media_stream_source.cc
++++ b/third_party/blink/renderer/platform/exported/mediastream/web_platform_media_stream_source.cc
+@@ -38,6 +38,7 @@ void WebPlatformMediaStreamSource::SetSourceMuted(bool is_muted) {
+   // that out already.
+   if (!Owner())
+     return;
++  VLOG(0) << "WebPlatformMediaStreamSource::SetSourceMuted is_muted=" << is_muted;
+   Owner().SetReadyState(is_muted ? WebMediaStreamSource::kReadyStateMuted
+                                  : WebMediaStreamSource::kReadyStateLive);
+ }
+diff --git a/third_party/blink/renderer/platform/mediastream/media_stream_source.cc b/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
+index c29dbf9461d55d36176b231bf86937707ee1c7d5..8a10eceb71916f1fb825b8ed23e06c4e5630421d 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
++++ b/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
+@@ -182,8 +182,9 @@ void MediaStreamSource::SetGroupId(const String& group_id) {
+ }
+ 
+ void MediaStreamSource::SetReadyState(ReadyState ready_state) {
+-  SendLogMessage(String::Format("SetReadyState({id=%s}, {ready_state=%s})",
++  SendLogMessage(String::Format("SetReadyState({id=%s}, {ready_state:%s => %s})",
+                                 Id().Utf8().c_str(),
++                                ReadyStateToString(ready_state_),
+                                 ReadyStateToString(ready_state))
+                      .Utf8());
+   if (ready_state_ != kReadyStateEnded && ready_state_ != ready_state) {
+diff --git a/third_party/blink/renderer/platform/video_capture/video_capture_impl.cc b/third_party/blink/renderer/platform/video_capture/video_capture_impl.cc
+index 0fd0270c7686a3a184580d99d6f49c670c682ea3..0ac1a7f21acdca264c873bb5ebba4e2424045773 100644
+--- a/third_party/blink/renderer/platform/video_capture/video_capture_impl.cc
++++ b/third_party/blink/renderer/platform/video_capture/video_capture_impl.cc
+@@ -661,7 +661,7 @@ void VideoCaptureImpl::SetGpuMemoryBufferSupportForTesting(
+ }
+ 
+ void VideoCaptureImpl::OnStateChanged(media::mojom::VideoCaptureState state) {
+-  DVLOG(1) << __func__ << " state: " << state;
++  VLOG(0) << __func__ << " state: " << state;
+   DCHECK_CALLED_ON_VALID_THREAD(io_thread_checker_);
+ 
+   // Stop the startup deadline timer as something has happened.
