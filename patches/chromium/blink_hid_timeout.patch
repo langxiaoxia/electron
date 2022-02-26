@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Sat, 26 Feb 2022 17:15:26 +0800
+Subject: blink_hid_timeout
+
+
+diff --git a/third_party/blink/renderer/modules/hid/hid.cc b/third_party/blink/renderer/modules/hid/hid.cc
+index f5a0c1714b202e54984d789f316a2a5336116be2..c9118d3fd76421230e3c5d19150a9d15ac383a2b 100644
+--- a/third_party/blink/renderer/modules/hid/hid.cc
++++ b/third_party/blink/renderer/modules/hid/hid.cc
+@@ -204,12 +204,16 @@ ScriptPromise HID::requestDevice(ScriptState* script_state,
+     return ScriptPromise();
+   }
+ 
++  //-by xxlang@2021-08-05 {
++/*
+   if (!LocalFrame::HasTransientUserActivation(
+           GetSupplementable()->DomWindow()->GetFrame())) {
+     exception_state.ThrowSecurityError(
+         "Must be handling a user gesture to show a permission request.");
+     return ScriptPromise();
+   }
++*/
++  //-by xxlang@2021-08-05 }
+ 
+   auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+   ScriptPromise promise = resolver->Promise();
