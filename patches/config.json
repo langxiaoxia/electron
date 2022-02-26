@@ -17,5 +17,7 @@
 
   "src/electron/patches/nan": "src/third_party/nan",
 
-  "src/electron/patches/rnnoise": "src/third_party/rnnoise"
+  "src/electron/patches/rnnoise": "src/third_party/rnnoise",
+
+  "src/electron/patches/webrtc": "src/third_party/webrtc"
 }
