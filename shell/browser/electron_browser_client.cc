@@ -1817,4 +1817,12 @@ content::BluetoothDelegate* ElectronBrowserClient::GetBluetoothDelegate() {
   return bluetooth_delegate_.get();
 }
 
+//+by xxlang@2021-07-06 {
+content::HidDelegate* ElectronBrowserClient::GetHidDelegate() {
+  if (!hid_delegate_)
+    hid_delegate_ = std::make_unique<ElectronHidDelegate>();
+  return hid_delegate_.get();
+}
+//+by xxlang@2021-07-06 }
+
 }  // namespace electron
