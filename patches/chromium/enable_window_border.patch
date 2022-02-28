@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 28 Feb 2022 10:11:42 +0800
+Subject: enable_window_border
+
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index c5a4d5ddfba8b06ac53f335de2ef26e2873166c4..895cf5a17fc581e200a705672c6eaef19ffc2a8d 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -533,6 +533,7 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+               DesktopCapturerLacros::CaptureType::kScreen,
+               webrtc::DesktopCaptureOptions());
+ #else
++      options.set_enable_border(true); //+by xxlang@2021-09-28
+       std::unique_ptr<webrtc::DesktopCapturer> screen_capturer(
+           webrtc::DesktopCapturer::CreateScreenCapturer(options));
+ #endif
+@@ -553,6 +554,7 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+           new DesktopCapturerLacros(DesktopCapturerLacros::CaptureType::kWindow,
+                                     webrtc::DesktopCaptureOptions()));
+ #else
++      options.set_enable_border(true); //+by xxlang@2021-10-15
+       std::unique_ptr<webrtc::DesktopCapturer> window_capturer =
+           webrtc::CroppingWindowCapturer::CreateCapturer(options);
+ #endif

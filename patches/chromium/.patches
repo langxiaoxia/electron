@@ -116,3 +116,4 @@ make_keychain_service_account_optionally_configurable_at_runtime.patch
 blink_hid_timeout.patch
 add_containerid_for_hid.patch
 add_capabilities_rnn_noise_suppression.patch
+enable_window_border.patch
