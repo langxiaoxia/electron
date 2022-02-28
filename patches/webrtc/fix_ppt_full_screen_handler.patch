@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 28 Feb 2022 10:26:46 +0800
+Subject: fix_ppt_full_screen_handler
+
+
+diff --git a/modules/desktop_capture/win/full_screen_win_application_handler.cc b/modules/desktop_capture/win/full_screen_win_application_handler.cc
+index 4c97b30e426e3b654e6bf0a19f8d5e3df67bfa3e..5b30aa2fd0a61e137edbe417c5bdde1b09b9986c 100644
+--- a/modules/desktop_capture/win/full_screen_win_application_handler.cc
++++ b/modules/desktop_capture/win/full_screen_win_application_handler.cc
+@@ -100,6 +100,10 @@ class FullScreenPowerPointHandler : public FullScreenApplicationHandler {
+       return 0;
+ 
+     HWND original_window = reinterpret_cast<HWND>(GetSourceId());
++
++    if (GetWindowType(original_window) != WindowType::kEditor)
++      return 0;
++
+     DWORD process_id = WindowProcessId(original_window);
+ 
+     DesktopCapturer::SourceList powerpoint_windows =
+@@ -108,21 +112,27 @@ class FullScreenPowerPointHandler : public FullScreenApplicationHandler {
+     if (powerpoint_windows.empty())
+       return 0;
+ 
+-    if (GetWindowType(original_window) != WindowType::kEditor)
+-      return 0;
+-
+     const auto original_document = GetDocumentFromEditorTitle(original_window);
+ 
+     for (const auto& source : powerpoint_windows) {
+       HWND window = reinterpret_cast<HWND>(source.id);
+ 
+       // Looking for slide show window for the same document
+-      if (GetWindowType(window) != WindowType::kSlideShow ||
+-          GetDocumentFromSlideShowTitle(window) != original_document) {
++      if (GetWindowType(window) != WindowType::kSlideShow)
++        continue;
++
++      const auto slideshow_document = GetDocumentFromSlideShowTitle(window);
++
++      if (slideshow_document.empty())
+         continue;
+-      }
+ 
+-      return source.id;
++      if (slideshow_document == original_document)
++        return source.id;
++
++      if (GetDocumentFromSlideShowTitleNew(window) == original_document) //+by xxlang@2021-09-08
++        return source.id;
++
++      continue;
+     }
+ 
+     return 0;
+@@ -167,6 +177,30 @@ class FullScreenPowerPointHandler : public FullScreenApplicationHandler {
+     }
+   }
+ 
++//+by xxlang@2021-09-08 {
++  constexpr static char kDocumentTitleSeparatorLeft[] = " - [";
++  constexpr static char kDocumentTitleSeparatorRight[] = "]";
++
++  std::string GetDocumentFromSlideShowTitleNew(HWND window) const {
++    std::string title = WindowText(window);
++    auto left_pos = title.find(kDocumentTitleSeparatorLeft);
++    auto right_pos = title.rfind(kDocumentTitleSeparatorRight);
++    constexpr size_t kSeparatorLength = arraysize(kDocumentTitleSeparatorLeft) - 1;
++    if (left_pos == std::string::npos || right_pos == std::string::npos)
++      return title;
++
++    if (right_pos > left_pos + kSeparatorLength) {
++      auto result_len = right_pos - left_pos - kSeparatorLength;
++      auto document = title.substr(left_pos + kSeparatorLength, result_len);
++      return rtc::string_trim(document);
++    } else {
++      auto document =
++          title.substr(left_pos + kSeparatorLength, std::wstring::npos);
++      return rtc::string_trim(document);
++    }
++  }
++//+by xxlang@2021-09-08 }
++
+   bool IsEditorWindow(HWND window) const {
+     return CheckWindowClassName(window, L"PPTFrameClass");
+   }
