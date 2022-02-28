@@ -1,2 +1,3 @@
 add_webrtc_rnn_ns.patch
 add_window_border.patch
+add_wps_full_screen_handler.patch
