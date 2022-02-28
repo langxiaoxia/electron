@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 28 Feb 2022 10:40:18 +0800
+Subject: fix_share_dingtalk_wps_black
+
+
+diff --git a/modules/desktop_capture/cropping_window_capturer_win.cc b/modules/desktop_capture/cropping_window_capturer_win.cc
+index f5e3912061cd3848b37d53bfaab8aa75545bf114..4762db6492be58a7d2b03596f8ee37e6eb7f749c 100644
+--- a/modules/desktop_capture/cropping_window_capturer_win.cc
++++ b/modules/desktop_capture/cropping_window_capturer_win.cc
+@@ -82,9 +82,17 @@ struct TopWindowVerifierContext : public SelectedWindowContext {
+           continue;
+         }
+ 
++        //+by xxlang@2022-02-26 {
++        if (window_capture_helper()->IsWindowToolTip(hwnd)) {
++          window_capture_helper()->LogWindow(hwnd, "IsTopWindow(ignore tooltip window)");
++          continue;
++        }
++        //+by xxlang@2022-02-26 }
++
+         // Check whether this window intersects with the selected window.
+         if (IsWindowOverlappingSelectedWindow(hwnd)) {
+           // If intersection is not empty, the selected window is not on top.
++          window_capture_helper()->LogWindow(hwnd, "IsTopWindow(overlapped by window)");
+           return false;
+         }
+       }
+diff --git a/modules/desktop_capture/win/window_capture_utils.cc b/modules/desktop_capture/win/window_capture_utils.cc
+index ff95cb349476e79f38ee5eb97ce0a3083971335a..cc93ab63a25df3b24b6aba9574cd2110a880d72c 100644
+--- a/modules/desktop_capture/win/window_capture_utils.cc
++++ b/modules/desktop_capture/win/window_capture_utils.cc
+@@ -378,6 +378,82 @@ bool WindowCaptureHelperWin::IsWindowChromeNotification(HWND hwnd) {
+   return false;
+ }
+ 
++//+by xxlang@2022-02-26 {
++const wchar_t kWPSTitlePrefix[] = L"wps";
++const wchar_t* kToolTipClass[] = {L"CToolTipEx",
++                                  L"DuiShadowWnd",
++                                  L"SysShadow",
++                                  L"QToolTip",
++                                  L"QWidget",
++                                  L"QPopup",
++                                  L"Qt5QWindowToolTipDropShadowSaveBits",
++                                  L"Qt5QWindowPopupDropShadowSaveBits"};
++
++bool WindowCaptureHelperWin::IsWindowToolTip(HWND hwnd) {
++  const size_t kTitleLength = 8;
++  WCHAR window_title[kTitleLength];
++  GetWindowTextW(hwnd, window_title, kTitleLength);
++  if (wcsnlen_s(window_title, kTitleLength) != 0 && wcsncmp(window_title, kWPSTitlePrefix, wcsnlen_s(kWPSTitlePrefix, kTitleLength)) != 0) {
++    return false;
++  }
++
++  const size_t kClassLength = 256;
++  WCHAR class_name[kClassLength];
++  const int class_name_length = GetClassNameW(hwnd, class_name, kClassLength);
++  if (class_name_length < 1) {
++    return false;
++  }
++
++  for (size_t i = 0; i < arraysize(kToolTipClass); i++) {
++    if (wcsncmp(class_name, kToolTipClass[i], wcsnlen_s(kToolTipClass[i], kClassLength)) == 0) {
++      return true;
++    }
++  }
++
++  if (wcsnlen_s(window_title, kTitleLength) != 0 && wcsncmp(window_title, kWPSTitlePrefix, wcsnlen_s(kWPSTitlePrefix, kTitleLength)) == 0) {
++    LogWindow(hwnd, "IsWindowToolTip(miss wps)");
++  } else if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) {
++    LogWindow(hwnd, "IsWindowToolTip(miss layered)");
++  }
++  return false;
++}
++
++void WindowCaptureHelperWin::LogWindow(HWND hwnd, const char* prefix) {
++  char ansi_empty[] = "{empty}";
++  char* ansi_window_title = ansi_empty;
++  char* ansi_class_name = ansi_empty;
++  
++  const LONG exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
++
++  const size_t kTitleLength = 256;
++  WCHAR window_title[kTitleLength];
++  if (GetWindowTextW(hwnd, window_title, kTitleLength) > 0) {
++    const int ansi_length = WideCharToMultiByte(CP_ACP, 0, window_title, -1, nullptr, 0, nullptr, nullptr);
++    ansi_window_title = new char[ansi_length + 1];
++    WideCharToMultiByte(CP_ACP, 0, window_title, -1, ansi_window_title, ansi_length, nullptr, nullptr);
++    ansi_window_title[ansi_length] = 0;
++  }
++
++  const size_t kClassLength = 256;
++  WCHAR class_name[kClassLength];
++  if (GetClassNameW(hwnd, class_name, kClassLength) > 0) {
++    const int ansi_length = WideCharToMultiByte(CP_ACP, 0, class_name, -1, nullptr, 0, nullptr, nullptr);
++    ansi_class_name = new char[ansi_length + 1];
++    WideCharToMultiByte(CP_ACP, 0, class_name, -1, ansi_class_name, ansi_length, nullptr, nullptr);
++    ansi_class_name[ansi_length] = 0;
++  }
++
++  RTC_LOG(LS_INFO) << prefix << ": hwnd=" << hwnd << ", window_title=" << ansi_window_title << ", class_name=" << ansi_class_name << ", exstyle=" << exstyle;
++
++  if (ansi_window_title != ansi_empty) {
++    delete[] ansi_window_title;
++  }
++  if (ansi_class_name != ansi_empty) {
++    delete[] ansi_class_name;
++  }
++}
++//+by xxlang@2022-02-26 }
++
+ // |content_rect| is preferred because,
+ // 1. WindowCapturerWinGdi is using GDI capturer, which cannot capture DX
+ // output.
+diff --git a/modules/desktop_capture/win/window_capture_utils.h b/modules/desktop_capture/win/window_capture_utils.h
+index 9d29faad2394348e0c9ce6a4b3886341280bbb63..3f408ab2a2523d8290708227b1da1019ed0be93e 100644
+--- a/modules/desktop_capture/win/window_capture_utils.h
++++ b/modules/desktop_capture/win/window_capture_utils.h
+@@ -107,6 +107,8 @@ class WindowCaptureHelperWin {
+ 
+   bool IsAeroEnabled();
+   bool IsWindowChromeNotification(HWND hwnd);
++  bool IsWindowToolTip(HWND hwnd); //+by xxlang@2022-02-26
++  void LogWindow(HWND hwnd, const char* prefix); //+by xxlang@2022-02-26
+   bool AreWindowsOverlapping(HWND hwnd,
+                              HWND selected_hwnd,
+                              const DesktopRect& selected_window_rect);
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index a9ae83cf4751e7eae8af6fa3a9a4198741f9e690..d36d9105023f3cbc4f509f96fabd279d0890eae6 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -66,6 +66,15 @@ BOOL CALLBACK OwnedWindowCollector(HWND hwnd, LPARAM param) {
+   // Owned windows that intersect the selected window should be captured.
+   if (context->IsWindowOwnedBySelectedWindow(hwnd) &&
+       context->IsWindowOverlappingSelectedWindow(hwnd)) {
++    //+by xxlang@2022-02-26 {
++    const size_t kMaxClassNameLength = 256;
++    WCHAR owned_class_name[kMaxClassNameLength] = L"";
++    const int owned_class_name_length =
++        GetClassNameW(hwnd, owned_class_name, kMaxClassNameLength);
++    if (owned_class_name_length < 1)
++      return TRUE;
++    //+by xxlang@2022-02-26 }
++
+     // Skip windows that draw shadows around menus. These "SysShadow" windows
+     // would otherwise be captured as solid black bars with no transparency
+     // gradient (since this capturer doesn't detect / respect variations in the
+@@ -83,6 +92,36 @@ BOOL CALLBACK OwnedWindowCollector(HWND hwnd, LPARAM param) {
+           wcscmp(class_name, kSysShadow) == 0) {
+         return TRUE;
+       }
++
++      //+by xxlang@2022-02-26 {
++      if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) {
++        // Skip DingTalk window draw shadow around menu.
++        if (wcscmp(owned_class_name, L"DuiShadowWnd") == 0)
++          return TRUE;
++
++        // Skip WPS Office window draw shadow around menu.
++        if (wcscmp(owned_class_name, L"Qt5QWindowIcon") == 0)
++          return TRUE;
++	  }
++
++      context->window_capture_helper()->LogWindow(
++          hwnd, "OwnedWindowCollector(NOT skip transparent window)");
++    } else if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) {
++      // Skip DingTalk window draw shadow around frame.
++      if (wcscmp(owned_class_name, L"DuiShadowWnd") == 0)
++        return TRUE;
++
++      // Skip WPS Office window draw shadow around frame.
++      if (wcscmp(owned_class_name, L"Qt5QWindowIcon") == 0)
++        return TRUE;
++      if (wcscmp(owned_class_name, L"Qt5QWindowToolSaveBits") == 0)
++        return TRUE;
++      if (wcscmp(owned_class_name, L"KDlgBorder") == 0)
++        return TRUE;
++
++      context->window_capture_helper()->LogWindow(
++          hwnd, "OwnedWindowCollector(NOT skip layered window)");
++    //+by xxlang@2022-02-26 }
+     }
+ 
+     context->owned_windows->push_back(hwnd);
