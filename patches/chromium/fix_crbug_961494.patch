@@ -1,0 +1,340 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 7 Mar 2022 10:21:19 +0800
+Subject: fix_crbug_961494
+
+
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+index df80e3760478d35c4804a151aa3de36b6f7eeaa6..19dd63f024c339a0b7cedf89d1f461ebfccd4557 100644
+--- a/third_party/blink/renderer/core/dom/element.cc
++++ b/third_party/blink/renderer/core/dom/element.cc
+@@ -94,7 +94,9 @@
+ #include "third_party/blink/renderer/core/dom/space_split_string.h"
+ #include "third_party/blink/renderer/core/dom/text.h"
+ #include "third_party/blink/renderer/core/dom/whitespace_attacher.h"
++#include "third_party/blink/renderer/core/editing/commands/undo_stack.h" //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ #include "third_party/blink/renderer/core/editing/editing_utilities.h"
++#include "third_party/blink/renderer/core/editing/editor.h" //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
+ #include "third_party/blink/renderer/core/editing/frame_selection.h"
+ #include "third_party/blink/renderer/core/editing/ime/input_method_controller.h"
+@@ -2675,8 +2677,18 @@ void Element::RemovedFrom(ContainerNode& insertion_point) {
+     DCHECK(!data->HasPseudoElements());
+   }
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+   if (GetDocument().GetFrame())
+     GetDocument().GetFrame()->GetEventHandler().ElementRemoved(this);
++#else
++  if (auto* const frame = GetDocument().GetFrame()) {
++    if (UNLIKELY(HasUndoStack()))
++      frame->GetEditor().GetUndoStack().ElementRemoved(this);
++    frame->GetEventHandler().ElementRemoved(this);
++  }
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ }
+ 
+ void Element::AttachLayoutTree(AttachContext& context) {
+@@ -4230,6 +4242,16 @@ void Element::SetShouldForceLegacyLayoutForChildInternal(bool force) {
+   EnsureElementRareData().SetShouldForceLegacyLayoutForChild(force);
+ }
+ 
++//+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++bool Element::HasUndoStack() const {
++  return HasRareData() && GetElementRareData()->HasUndoStack();
++}
++
++void Element::SetHasUndoStack(bool value) {
++  EnsureElementRareData().SetHasUndoStack(value);
++}
++//+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
++
+ void Element::UpdateForceLegacyLayout(const ComputedStyle& new_style,
+                                       const ComputedStyle* old_style) {
+   // ::first-letter may cause structure discrepancies between DOM and layout
+diff --git a/third_party/blink/renderer/core/dom/element.h b/third_party/blink/renderer/core/dom/element.h
+index fe435103808a49de2f703c2af0b53de78af49ee5..eb96f8ebe45197216a6aa045cdab006d6ffe9ce6 100644
+--- a/third_party/blink/renderer/core/dom/element.h
++++ b/third_party/blink/renderer/core/dom/element.h
+@@ -952,6 +952,12 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
+   // information.
+   bool ShouldCompositeForDocumentTransition() const;
+ 
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++  // For undo stack cleanup
++  bool HasUndoStack() const;
++  void SetHasUndoStack(bool);
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
++
+  protected:
+   const ElementData* GetElementData() const { return element_data_.Get(); }
+   UniqueElementData& EnsureUniqueElementData();
+diff --git a/third_party/blink/renderer/core/dom/element_rare_data.h b/third_party/blink/renderer/core/dom/element_rare_data.h
+index f82d6732f28c030858b636544ab57e035d70c2c3..3737cb38d65d9f390c98bd9ffa5a4f7d640204c3 100644
+--- a/third_party/blink/renderer/core/dom/element_rare_data.h
++++ b/third_party/blink/renderer/core/dom/element_rare_data.h
+@@ -159,6 +159,11 @@ class ElementRareData : public NodeRareData {
+     return should_force_legacy_layout_for_child_;
+   }
+ 
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++  bool HasUndoStack() const { return has_undo_stack_; }
++  void SetHasUndoStack(bool value) { has_undo_stack_ = value; }
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
++
+   AccessibleNode* GetAccessibleNode() const { return accessible_node_.Get(); }
+   AccessibleNode* EnsureAccessibleNode(Element* owner_element) {
+     if (!accessible_node_) {
+@@ -246,6 +251,7 @@ class ElementRareData : public NodeRareData {
+   bool did_attach_internals_ = false;
+   bool should_force_legacy_layout_for_child_ = false;
+   bool style_should_force_legacy_layout_ = false;
++  bool has_undo_stack_ = false; //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ };
+ 
+ inline LayoutSize DefaultMinimumSizeForResizing() {
+diff --git a/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc b/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
+index 43d79c7a67ad3b8eb8a75eb937182d771d4846ea..c189950c2eabeefd7917844c6c4196af1326281e 100644
+--- a/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
++++ b/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
+@@ -2122,6 +2122,10 @@ void CompositeEditCommand::AppliedEditing() {
+         EnsureUndoStep()->EndingSelection());
+     last_edit_command->GetUndoStep()->SetSelectionIsDirectional(
+         GetUndoStep()->SelectionIsDirectional());
++	//+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++    editor.GetUndoStack().DidSetEndingSelection(
++        last_edit_command->GetUndoStep());
++	//+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+     last_edit_command->AppendCommandToUndoStep(this);
+   } else {
+     // Only register a new undo command if the command passed in is
+diff --git a/third_party/blink/renderer/core/editing/commands/undo_stack.cc b/third_party/blink/renderer/core/editing/commands/undo_stack.cc
+index d41997e94054f9e4502ed277a1da3e133a7903d6..2bf43444823207e49494de502b3ce3697e347013 100644
+--- a/third_party/blink/renderer/core/editing/commands/undo_stack.cc
++++ b/third_party/blink/renderer/core/editing/commands/undo_stack.cc
+@@ -41,7 +41,7 @@ static const size_t kMaximumUndoStackDepth = 1000;
+ UndoStack::UndoStack() = default;
+ 
+ void UndoStack::RegisterUndoStep(UndoStep* step) {
+-  EnsureListeningMemoryPressure();
++//  EnsureListeningMemoryPressure(); //-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+   if (!undo_stack_.IsEmpty())
+     DCHECK_GE(step->SequenceNumber(), undo_stack_.back()->SequenceNumber());
+   if (undo_stack_.size() == kMaximumUndoStackDepth) {
+@@ -51,10 +51,17 @@ void UndoStack::RegisterUndoStep(UndoStep* step) {
+   if (!in_redo_)
+     redo_stack_.clear();
+   undo_stack_.push_back(step);
++  DidSetEndingSelection(step); //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ }
+ 
+ void UndoStack::RegisterRedoStep(UndoStep* step) {
+-  EnsureListeningMemoryPressure();
++//  EnsureListeningMemoryPressure(); //-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if DCHECK_IS_ON()
++  if (auto* element = step->EndingRootEditableElement())
++    DCHECK(element->HasUndoStack()) << element;
++#endif
++  //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+   redo_stack_.push_back(step);
+ }
+ 
+@@ -90,7 +97,7 @@ void UndoStack::Redo() {
+ void UndoStack::Clear() {
+   undo_stack_.clear();
+   redo_stack_.clear();
+-  StopListeningMemoryPressure();
++//  StopListeningMemoryPressure(); //-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ }
+ 
+ void UndoStack::Trace(Visitor* visitor) const {
+@@ -109,13 +116,24 @@ UndoStack::UndoStepRange UndoStack::UndoSteps() const {
+   return UndoStepRange(undo_stack_);
+ }
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+ void UndoStack::EnsureListeningMemoryPressure() {
+   if (is_listen_memory_pressure_)
+     return;
+   MemoryPressureListenerRegistry::Instance().RegisterClient(this);
+   is_listen_memory_pressure_ = true;
+ }
++#else
++void UndoStack::DidSetEndingSelection(UndoStep* step) {
++  if (auto* element = step->EndingRootEditableElement())
++    element->SetHasUndoStack(true);
++}
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ 
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+ void UndoStack::StopListeningMemoryPressure() {
+   if (!is_listen_memory_pressure_)
+     return;
+@@ -124,7 +142,11 @@ void UndoStack::StopListeningMemoryPressure() {
+   MemoryPressureListenerRegistry::Instance().UnregisterClient(this);
+   is_listen_memory_pressure_ = false;
+ }
++#endif
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+ void UndoStack::OnMemoryPressure(
+     base::MemoryPressureListener::MemoryPressureLevel) {
+   // In design mode, every root editable elements can be reinserted.
+@@ -147,5 +169,32 @@ void UndoStack::OnMemoryPressure(
+       std::remove_if(redo_stack_.begin(), redo_stack_.end(), is_disconnected),
+       redo_stack_.end());
+ }
++#else
++void UndoStack::ElementRemoved(Element* element) {
++  DCHECK(element->HasUndoStack()) << element;
++  // In design mode, every root editable elements can be reinserted.
++  if (!undo_stack_.IsEmpty() &&
++      undo_stack_.front()->GetDocument().InDesignMode())
++    return;
++  if (!redo_stack_.IsEmpty() &&
++      redo_stack_.front()->GetDocument().InDesignMode())
++    return;
++
++  const auto should_be_erased = [&element](const UndoStep* undo_step) {
++    return undo_step->IsOwnedBy(*element);
++  };
++
++  undo_stack_.erase(
++      std::remove_if(undo_stack_.begin(), undo_stack_.end(), should_be_erased),
++      undo_stack_.end());
++
++  redo_stack_.erase(
++      std::remove_if(redo_stack_.begin(), redo_stack_.end(), should_be_erased),
++      redo_stack_.end());
++
++  element->SetHasUndoStack(false);
++}
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/editing/commands/undo_stack.h b/third_party/blink/renderer/core/editing/commands/undo_stack.h
+index ef5270f77301ef343fbdd29dfea7c419f34b1ca3..a72c558c630516770cef8e655dcf1704b89aedea 100644
+--- a/third_party/blink/renderer/core/editing/commands/undo_stack.h
++++ b/third_party/blink/renderer/core/editing/commands/undo_stack.h
+@@ -34,19 +34,28 @@
+ #include "base/macros.h"
+ #include "third_party/blink/renderer/core/core_export.h"
+ #include "third_party/blink/renderer/platform/heap/handle.h"
+-#include "third_party/blink/renderer/platform/instrumentation/memory_pressure_listener.h"
+-#include "third_party/blink/renderer/platform/wtf/deque.h"
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++//#include "third_party/blink/renderer/platform/instrumentation/memory_pressure_listener.h"
++//#include "third_party/blink/renderer/platform/wtf/deque.h"
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ #include "third_party/blink/renderer/platform/wtf/forward.h"
+ 
+ namespace blink {
+ 
++class Element; //+by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ class LocalFrame;
+ class UndoStep;
+ 
+ // |UndoStack| is owned by and always 1:1 to |Editor|. Since |Editor| is 1:1 to
+ // |LocalFrame|, |UndoStack| is also 1:1 to |LocalFrame|.
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+ class CORE_EXPORT UndoStack final : public GarbageCollected<UndoStack>,
+                                     public MemoryPressureListener {
++#else
++class CORE_EXPORT UndoStack final : public GarbageCollected<UndoStack> {
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
+   using UndoStepStack = HeapVector<Member<UndoStep>>;
+ 
+  public:
+@@ -77,20 +86,37 @@ class CORE_EXPORT UndoStack final : public GarbageCollected<UndoStack>,
+   UndoStepRange RedoSteps() const;
+   UndoStepRange UndoSteps() const;
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+   void Trace(Visitor*) const final;
++#else
++  // Called when set ending selection inf |undo_step|.
++  void DidSetEndingSelection(UndoStep* step);
++
++  // Called when |element| is removed by |Node::RemovedFrom()|. |element|
++  // should be root editable element and be in undo/redo stack.
++  void ElementRemoved(Element* element);
++
++  void Trace(Visitor*) const;
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ 
+  private:
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+   void EnsureListeningMemoryPressure();
+   void StopListeningMemoryPressure();
+ 
+   // Implementation of MemoryPressureListener
+   void OnMemoryPressure(
+       base::MemoryPressureListener::MemoryPressureLevel) final;
++#endif
++//-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
+ 
+   UndoStepStack undo_stack_;
+   UndoStepStack redo_stack_;
+   bool in_redo_ = false;
+-  bool is_listen_memory_pressure_ = false;
++//  bool is_listen_memory_pressure_ = false; //-by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2
+ 
+   DISALLOW_COPY_AND_ASSIGN(UndoStack);
+ };
+diff --git a/third_party/blink/renderer/core/editing/commands/undo_step.cc b/third_party/blink/renderer/core/editing/commands/undo_step.cc
+index 23c2c9f4e421bebf60602ed22e631efc61bb5f67..72d6f71a852d7a13c60a0c284136579fd880495d 100644
+--- a/third_party/blink/renderer/core/editing/commands/undo_step.cc
++++ b/third_party/blink/renderer/core/editing/commands/undo_step.cc
+@@ -32,10 +32,18 @@ UndoStep::UndoStep(Document* document,
+   // See |TypingCommand::ForwardDeleteKeyPressed()|
+ }
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+ bool UndoStep::IsConnected() const {
+   return EndingRootEditableElement() &&
+          EndingRootEditableElement()->isConnected();
+ }
++#else
++bool UndoStep::IsOwnedBy(const Element& element) const {
++  return EndingRootEditableElement() == &element;
++}
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+ 
+ void UndoStep::Unapply() {
+   DCHECK(document_);
+diff --git a/third_party/blink/renderer/core/editing/commands/undo_step.h b/third_party/blink/renderer/core/editing/commands/undo_step.h
+index 28cd163c3d3644fbd9f602b3960b40d83266dbd3..bd2e8acad42838de70bc855c5ed794b1f3810cb2 100644
+--- a/third_party/blink/renderer/core/editing/commands/undo_step.h
++++ b/third_party/blink/renderer/core/editing/commands/undo_step.h
+@@ -45,8 +45,15 @@ class UndoStep final : public GarbageCollected<UndoStep> {
+            const SelectionForUndoStep& starting_selection,
+            const SelectionForUndoStep& ending_selection);
+ 
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 {
++#if 0
+   // Returns true if associated root editable elements are connected.
+   bool IsConnected() const;
++#else
++  // Returns true if is owned by |element|
++  bool IsOwnedBy(const Element& element) const;
++#endif
++//*by xxlang@2022-03-04 : merge chromium commit 2b2e2ff2d242e8b419930d2fccb344b812bc53d2 }
+   void Unapply();
+   void Reapply();
+   void Append(SimpleEditCommand*);
