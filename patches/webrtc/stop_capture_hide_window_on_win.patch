@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 24 Mar 2022 11:10:10 +0800
+Subject: stop_capture_hide_window_on_win
+
+
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index d2dc18c360b562093609ffa4b3c404f9a03ea37b..7f1c4ac6e8347d0fbf197c02a69a8a64b6beb73b 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -242,6 +242,13 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+   // during the transition of full screen mode on/off.
+   if (original_rect.is_empty() ||
+       !window_capture_helper_.IsWindowVisibleOnCurrentDesktop(window_)) {
++    //+by xxlang@2022-03-24 {
++    if (!IsWindowVisible(window_)) {
++      RTC_LOG(LS_ERROR) << "Target window has been hide.";
++      return {Result::ERROR_PERMANENT, nullptr};
++    }
++    //+by xxlang@2022-03-24 }
++
+     //+by xxlang@2022-01-28 {
+     if (IsIconic(window_)) {
+       return {Result::PAUSE_ICONIC, nullptr};
