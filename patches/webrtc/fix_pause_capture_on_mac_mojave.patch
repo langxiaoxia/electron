@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 28 Mar 2022 13:06:52 +0800
+Subject: fix_pause_capture_on_mac_mojave
+
+
+diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
+index e3f2ef07c064f61fb7422ffa0c711be3e7600e86..8da40ab970b719d9cec8921cea4363b806598a59 100644
+--- a/modules/desktop_capture/window_capturer_mac.mm
++++ b/modules/desktop_capture/window_capturer_mac.mm
+@@ -222,7 +222,11 @@ explicit WindowCapturerMac(
+   }
+ 
+   std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindow(on_screen_window);
+-  if (!frame) {
++  //+by xxlang@2022-03-28 : {
++  // On macOS Mojave we receive a 1x1 frame when the shared window is off screen.
++  // On macOS Catalina and Big Sur we receive null frame when the shared window is off screen.
++  //+by xxlang@2022-03-28 : }
++  if (!frame || frame->size().width() <= 1 || frame->size().height() <= 1) {
+     //+by xxlang@2022-01-18 {
+     if (!IsWindowOnScreen(on_screen_window)) {
+       callback_->OnCaptureResult(Result::PAUSE_ICONIC, nullptr);
