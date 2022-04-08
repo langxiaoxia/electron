@@ -178,3 +178,5 @@ fix_border_for_native_window.patch
 add_containerid_for_hid_on_linux.patch
 support_desktop_capture_pause.patch
 fix_crbug_961494.patch
+match_containerid_for_hid_on_mac.patch
+match_containerid_for_hid_on_linux.patch

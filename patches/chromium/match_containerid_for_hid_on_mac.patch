@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 8 Apr 2022 07:54:59 +0800
+Subject: match_containerid_for_hid_on_mac
+
+
+diff --git a/media/audio/mac/audio_manager_mac.cc b/media/audio/mac/audio_manager_mac.cc
+index 55785c04a2881b9569b27bbb565ed455fadfb7d5..46b31a180571bd62a31ad38b7ad6f1ffe7675430 100644
+--- a/media/audio/mac/audio_manager_mac.cc
++++ b/media/audio/mac/audio_manager_mac.cc
+@@ -10,11 +10,15 @@
+ #include <utility>
+ #include <vector>
+ 
++#include <IOKit/audio/IOAudioDefines.h> //+by xxlang@2022-04-06
++#include <IOKit/usb/USB.h> //+by xxlang@2022-04-06
++
+ #include "base/bind.h"
+ #include "base/command_line.h"
+ #include "base/mac/mac_logging.h"
+ #include "base/mac/mac_util.h"
+ #include "base/mac/scoped_cftyperef.h"
++#include "base/mac/foundation_util.h" //+by xxlang@2022-04-06
+ #include "base/macros.h"
+ #include "base/memory/free_deleter.h"
+ #include "base/optional.h"
+@@ -154,7 +158,37 @@ static void GetAudioDeviceInfo(bool is_input,
+     if (core_audio_mac::IsPrivateAggregateDevice(device_id))
+       continue;
+ 
+-    device_names->emplace_back(std::move(*label), std::move(*unique_id), std::string()); //+by xxlang@2021-09-06
++    //+by xxlang@2022-04-06 {
++    std::string container_id;
++    io_iterator_t it;
++    if (IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching(kIOAudioEngineClassName), &it) == KERN_SUCCESS) {
++      io_service_t service;
++      while ((service = IOIteratorNext(it)) != 0) {
++        base::ScopedCFTypeRef<CFStringRef> ref_uid(base::mac::CFCast<CFStringRef>(
++            IORegistryEntryCreateCFProperty(service, CFSTR(kIOAudioEngineGlobalUniqueIDKey), kCFAllocatorDefault, 0)));
++        if (!ref_uid) {
++          continue;
++        }
++
++        std::string str_uid = base::SysCFStringRefToUTF8(ref_uid);
++        if (str_uid != unique_id) {
++          continue;
++        }
++
++        base::ScopedCFTypeRef<CFNumberRef> ref_lid(base::mac::CFCast<CFNumberRef>(
++            IORegistryEntryCreateCFProperty(service, CFSTR(kUSBDevicePropertyLocationID), kCFAllocatorDefault, 0)));
++        int32_t result;
++        if (ref_lid && CFNumberGetValue(ref_lid, kCFNumberSInt32Type, &result)) {
++          container_id = base::NumberToString(result);
++        }
++        break;
++      }
++      IOObjectRelease(it);
++    }
++    //+by xxlang@2022-04-06 }
++
++    DVLOG(0) << "unique_id=" << *unique_id << ", device_name=" << *label << ", container_id=" << container_id;
++    device_names->emplace_back(std::move(*label), std::move(*unique_id), container_id); //+by xxlang@2022-04-06
+   }
+ 
+   if (!device_names->empty()) {
