@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mirko Bonadei <mbonadei@webrtc.org>
+Date: Tue, 17 Aug 2021 13:27:39 +0200
+Subject: Add missing header (for unique_ptr).
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bug: None
+Change-Id: I2ee004ac4feca9a0c25551fc1709069e8df836b4
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/229026
+Reviewed-by: Per Åhgren <peah@webrtc.org>
+Commit-Queue: Mirko Bonadei <mbonadei@webrtc.org>
+Cr-Commit-Position: refs/heads/master@{#34783}
+(cherry picked from commit 24e79f6962d7c4d3d2ba8f53c99878804c47d34f)
+
+diff --git a/modules/audio_processing/aec3/reverb_model_estimator.h b/modules/audio_processing/aec3/reverb_model_estimator.h
+index 3b9971abae1ef2888d77436ea3f04a700195b637..e4e9540673daad0b10ba76a393a8ff7df9d297ce 100644
+--- a/modules/audio_processing/aec3/reverb_model_estimator.h
++++ b/modules/audio_processing/aec3/reverb_model_estimator.h
+@@ -12,6 +12,7 @@
+ #define MODULES_AUDIO_PROCESSING_AEC3_REVERB_MODEL_ESTIMATOR_H_
+ 
+ #include <array>
++#include <memory>
+ #include <vector>
+ 
+ #include "absl/types/optional.h"

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cschuldt <cschuldt@google.com>
+Date: Fri, 3 Dec 2021 15:20:56 +0100
+Subject: Optimize the saturation detection (used by AnalyzeCapture()).
+
+Changing to an index for-loop (instead of a range for-loop) allows the compiler (clang for x86 at least) to unroll it x2.
+
+Bug: None
+Change-Id: I9b9612a8513a06e8aa3b12ae39f6911217da55fa
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/239741
+Reviewed-by: Ivo Creusen <ivoc@webrtc.org>
+Commit-Queue: Christian Schuldt <cschuldt@google.com>
+Cr-Commit-Position: refs/heads/main@{#35478}
+(cherry picked from commit 464752891124c5109d85aa839acd935a089142f5)
+
+diff --git a/modules/audio_processing/aec3/echo_canceller3.cc b/modules/audio_processing/aec3/echo_canceller3.cc
+index dfa932f49ce08ce2974dc5531470ce266ffe59a5..8a236e9d5eda9df3a3dd3d1f0e75bcaa953d6a8b 100644
+--- a/modules/audio_processing/aec3/echo_canceller3.cc
++++ b/modules/audio_processing/aec3/echo_canceller3.cc
+@@ -27,8 +27,8 @@ namespace {
+ enum class EchoCanceller3ApiCall { kCapture, kRender };
+ 
+ bool DetectSaturation(rtc::ArrayView<const float> y) {
+-  for (auto y_k : y) {
+-    if (y_k >= 32700.0f || y_k <= -32700.0f) {
++  for (size_t k = 0; k < y.size(); ++k) {
++    if (y[k] >= 32700.0f || y[k] <= -32700.0f) {
+       return true;
+     }
+   }
