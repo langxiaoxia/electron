@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Per=20=C3=85hgren?= <peah@webrtc.org>
+Date: Fri, 7 May 2021 23:17:28 +0000
+Subject: Add ability to adjust the suppressor smoothing in AEC3
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bug: b/177359044
+Change-Id: I5eddb6fa6f01aa14426161204e37a9097b182234
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/217889
+Reviewed-by: Gustaf Ullberg <gustaf@webrtc.org>
+Commit-Queue: Per Åhgren <peah@webrtc.org>
+Cr-Commit-Position: refs/heads/master@{#34203}
+(cherry picked from commit cbdbb8c1666fd08a094422905e73391706a05b03)
+
+diff --git a/api/audio/echo_canceller3_config.cc b/api/audio/echo_canceller3_config.cc
+index 4cb75043d6fd4babb674b128015a8f7bbfb9cf29..b38d6b5b7ec7411150a87877ae9aac9e133150a6 100644
+--- a/api/audio/echo_canceller3_config.cc
++++ b/api/audio/echo_canceller3_config.cc
+@@ -229,6 +229,12 @@ bool EchoCanceller3Config::Validate(EchoCanceller3Config* config) {
+   res =
+       res & Limit(&c->suppressor.nearend_tuning.max_dec_factor_lf, 0.f, 100.f);
+ 
++  res = res & Limit(&c->suppressor.last_permanent_lf_smoothing_band, 0, 64);
++  res = res & Limit(&c->suppressor.last_lf_smoothing_band, 0, 64);
++  res = res & Limit(&c->suppressor.last_lf_band, 0, 63);
++  res = res &
++        Limit(&c->suppressor.first_hf_band, c->suppressor.last_lf_band + 1, 64);
++
+   res = res & Limit(&c->suppressor.dominant_nearend_detection.enr_threshold,
+                     0.f, 1000000.f);
+   res = res & Limit(&c->suppressor.dominant_nearend_detection.snr_threshold,
+diff --git a/api/audio/echo_canceller3_config.h b/api/audio/echo_canceller3_config.h
+index d4a04cd2edd040d13ba0e5367bc43a5d096a99d8..087e8da4398df12b63bb4d97673ef6c8490757d1 100644
+--- a/api/audio/echo_canceller3_config.h
++++ b/api/audio/echo_canceller3_config.h
+@@ -194,6 +194,12 @@ struct RTC_EXPORT EchoCanceller3Config {
+                                    2.0f,
+                                    0.25f);
+ 
++    bool lf_smoothing_during_initial_phase = true;
++    int last_permanent_lf_smoothing_band = 0;
++    int last_lf_smoothing_band = 5;
++    int last_lf_band = 5;
++    int first_hf_band = 8;
++
+     struct DominantNearendDetection {
+       float enr_threshold = .25f;
+       float enr_exit_threshold = 10.f;
+diff --git a/api/audio/echo_canceller3_config_json.cc b/api/audio/echo_canceller3_config_json.cc
+index 39713a1fb47b619884aeda2d86e350532bc97f8a..91a3c66d33c21afe1bcec49a6a7bfceff1eed70e 100644
+--- a/api/audio/echo_canceller3_config_json.cc
++++ b/api/audio/echo_canceller3_config_json.cc
+@@ -341,6 +341,15 @@ void Aec3ConfigFromJsonString(absl::string_view json_string,
+                 &cfg.suppressor.nearend_tuning.max_dec_factor_lf);
+     }
+ 
++    ReadParam(section, "lf_smoothing_during_initial_phase",
++              &cfg.suppressor.lf_smoothing_during_initial_phase);
++    ReadParam(section, "last_permanent_lf_smoothing_band",
++              &cfg.suppressor.last_permanent_lf_smoothing_band);
++    ReadParam(section, "last_lf_smoothing_band",
++              &cfg.suppressor.last_lf_smoothing_band);
++    ReadParam(section, "last_lf_band", &cfg.suppressor.last_lf_band);
++    ReadParam(section, "first_hf_band", &cfg.suppressor.first_hf_band);
++
+     if (rtc::GetValueFromJsonObject(section, "dominant_nearend_detection",
+                                     &subsection)) {
+       ReadParam(subsection, "enr_threshold",
+@@ -651,6 +660,16 @@ std::string Aec3ConfigToJsonString(const EchoCanceller3Config& config) {
+   ost << "\"max_dec_factor_lf\": "
+       << config.suppressor.nearend_tuning.max_dec_factor_lf;
+   ost << "},";
++  ost << "\"lf_smoothing_during_initial_phase\": "
++      << (config.suppressor.lf_smoothing_during_initial_phase ? "true"
++                                                              : "false")
++      << ",";
++  ost << "\"last_permanent_lf_smoothing_band\": "
++      << config.suppressor.last_permanent_lf_smoothing_band << ",";
++  ost << "\"last_lf_smoothing_band\": "
++      << config.suppressor.last_lf_smoothing_band << ",";
++  ost << "\"last_lf_band\": " << config.suppressor.last_lf_band << ",";
++  ost << "\"first_hf_band\": " << config.suppressor.first_hf_band << ",";
+   ost << "\"dominant_nearend_detection\": {";
+   ost << "\"enr_threshold\": "
+       << config.suppressor.dominant_nearend_detection.enr_threshold << ",";
+diff --git a/modules/audio_processing/aec3/suppression_gain.cc b/modules/audio_processing/aec3/suppression_gain.cc
+index 5b01c52908dc9c71c06fd32be30a5821905c1db0..601c9c2664faea1800bfd269851eb9de38e7246d 100644
+--- a/modules/audio_processing/aec3/suppression_gain.cc
++++ b/modules/audio_processing/aec3/suppression_gain.cc
+@@ -230,16 +230,20 @@ void SuppressionGain::GetMinGain(
+       min_gain[k] = std::min(min_gain[k], 1.f);
+     }
+ 
+-    const bool is_nearend_state = dominant_nearend_detector_->IsNearendState();
+-    for (size_t k = 0; k < 6; ++k) {
+-      const auto& dec = is_nearend_state ? nearend_params_.max_dec_factor_lf
+-                                         : normal_params_.max_dec_factor_lf;
+-
+-      // Make sure the gains of the low frequencies do not decrease too
+-      // quickly after strong nearend.
+-      if (last_nearend[k] > last_echo[k]) {
+-        min_gain[k] = std::max(min_gain[k], last_gain_[k] * dec);
+-        min_gain[k] = std::min(min_gain[k], 1.f);
++    if (!initial_state_ ||
++        config_.suppressor.lf_smoothing_during_initial_phase) {
++      const float& dec = dominant_nearend_detector_->IsNearendState()
++                             ? nearend_params_.max_dec_factor_lf
++                             : normal_params_.max_dec_factor_lf;
++
++      for (int k = 0; k <= config_.suppressor.last_lf_smoothing_band; ++k) {
++        // Make sure the gains of the low frequencies do not decrease too
++        // quickly after strong nearend.
++        if (last_nearend[k] > last_echo[k] ||
++            k <= config_.suppressor.last_permanent_lf_smoothing_band) {
++          min_gain[k] = std::max(min_gain[k], last_gain_[k] * dec);
++          min_gain[k] = std::min(min_gain[k], 1.f);
++        }
+       }
+     }
+   } else {
+@@ -333,8 +337,12 @@ SuppressionGain::SuppressionGain(const EchoCanceller3Config& config,
+           num_capture_channels_,
+           aec3::MovingAverage(kFftLengthBy2Plus1,
+                               config.suppressor.nearend_average_blocks)),
+-      nearend_params_(config_.suppressor.nearend_tuning),
+-      normal_params_(config_.suppressor.normal_tuning) {
++      nearend_params_(config_.suppressor.last_lf_band,
++                      config_.suppressor.first_hf_band,
++                      config_.suppressor.nearend_tuning),
++      normal_params_(config_.suppressor.last_lf_band,
++                     config_.suppressor.first_hf_band,
++                     config_.suppressor.normal_tuning) {
+   RTC_DCHECK_LT(0, state_change_duration_blocks_);
+   last_gain_.fill(1.f);
+   if (config_.suppressor.use_subband_nearend_detection) {
+@@ -419,23 +427,23 @@ bool SuppressionGain::LowNoiseRenderDetector::Detect(
+ }
+ 
+ SuppressionGain::GainParameters::GainParameters(
++    int last_lf_band,
++    int first_hf_band,
+     const EchoCanceller3Config::Suppressor::Tuning& tuning)
+     : max_inc_factor(tuning.max_inc_factor),
+       max_dec_factor_lf(tuning.max_dec_factor_lf) {
+   // Compute per-band masking thresholds.
+-  constexpr size_t kLastLfBand = 5;
+-  constexpr size_t kFirstHfBand = 8;
+-  RTC_DCHECK_LT(kLastLfBand, kFirstHfBand);
++  RTC_DCHECK_LT(last_lf_band, first_hf_band);
+   auto& lf = tuning.mask_lf;
+   auto& hf = tuning.mask_hf;
+   RTC_DCHECK_LT(lf.enr_transparent, lf.enr_suppress);
+   RTC_DCHECK_LT(hf.enr_transparent, hf.enr_suppress);
+-  for (size_t k = 0; k < kFftLengthBy2Plus1; k++) {
++  for (int k = 0; k < static_cast<int>(kFftLengthBy2Plus1); k++) {
+     float a;
+-    if (k <= kLastLfBand) {
++    if (k <= last_lf_band) {
+       a = 0.f;
+-    } else if (k < kFirstHfBand) {
+-      a = (k - kLastLfBand) / static_cast<float>(kFirstHfBand - kLastLfBand);
++    } else if (k < first_hf_band) {
++      a = (k - last_lf_band) / static_cast<float>(first_hf_band - last_lf_band);
+     } else {
+       a = 1.f;
+     }
+diff --git a/modules/audio_processing/aec3/suppression_gain.h b/modules/audio_processing/aec3/suppression_gain.h
+index d049baeaafe46ff56f0a1b987115fba322532523..57264c262bda94fef141f28d90cf19156c2777f3 100644
+--- a/modules/audio_processing/aec3/suppression_gain.h
++++ b/modules/audio_processing/aec3/suppression_gain.h
+@@ -103,6 +103,8 @@ class SuppressionGain {
+ 
+   struct GainParameters {
+     explicit GainParameters(
++        int last_lf_band,
++        int first_hf_band,
+         const EchoCanceller3Config::Suppressor::Tuning& tuning);
+     const float max_inc_factor;
+     const float max_dec_factor_lf;

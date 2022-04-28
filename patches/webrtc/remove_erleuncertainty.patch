@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustaf Ullberg <gustaf@webrtc.org>
+Date: Tue, 13 Apr 2021 14:05:34 +0200
+Subject: Remove ErleUncertainty
+
+Erle Uncertainty changes the residual echo computation during saturated
+echo. However, the case of saturated echo is already handled by the
+residual echo estimator causing the ErleUncertainty to be a no-op.
+
+The change has been tested for bit-exactness.
+
+Bug: webrtc:8671
+Change-Id: I779ba67f99f29d4475a0465d05da03d42d50e075
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/215072
+Reviewed-by: Jesus de Vicente Pena <devicentepena@webrtc.org>
+Commit-Queue: Gustaf Ullberg <gustaf@webrtc.org>
+Cr-Commit-Position: refs/heads/master@{#33719}
+(cherry picked from commit 1fad94f50252092f901e8e2a9893748ee35c2114)
+
+diff --git a/modules/audio_processing/aec3/aec_state.cc b/modules/audio_processing/aec3/aec_state.cc
+index 5b31e3cb9f714fbd024a84f5fa89af4bcf61c1e1..15f3e178012bd94e66f3f9a5c0f58125ae4406b1 100644
+--- a/modules/audio_processing/aec3/aec_state.cc
++++ b/modules/audio_processing/aec3/aec_state.cc
+@@ -113,14 +113,6 @@ void AecState::GetResidualEchoScaling(
+                                           residual_scaling);
+ }
+ 
+-absl::optional<float> AecState::ErleUncertainty() const {
+-  if (SaturatedEcho()) {
+-    return 1.f;
+-  }
+-
+-  return absl::nullopt;
+-}
+-
+ AecState::AecState(const EchoCanceller3Config& config,
+                    size_t num_capture_channels)
+     : data_dumper_(
+diff --git a/modules/audio_processing/aec3/aec_state.h b/modules/audio_processing/aec3/aec_state.h
+index 5b40e9513a16ed3f845fafd1c146ce0c1eb469e8..22b4fed4a2dd9837ffcb8c571d9936d484953e7f 100644
+--- a/modules/audio_processing/aec3/aec_state.h
++++ b/modules/audio_processing/aec3/aec_state.h
+@@ -74,12 +74,6 @@ class AecState {
+     return erle_estimator_.Erle();
+   }
+ 
+-  // Returns an offset to apply to the estimation of the residual echo
+-  // computation. Returning nullopt means that no offset should be used, while
+-  // any other value will be applied as a multiplier to the estimated residual
+-  // echo.
+-  absl::optional<float> ErleUncertainty() const;
+-
+   // Returns the fullband ERLE estimate in log2 units.
+   float FullBandErleLog2() const { return erle_estimator_.FullbandErleLog2(); }
+ 
+diff --git a/modules/audio_processing/aec3/residual_echo_estimator.cc b/modules/audio_processing/aec3/residual_echo_estimator.cc
+index e352cf5552be3bb66f87e95baa9f264f09324b6f..0567b546c9778180781858b6da78f648caa04f41 100644
+--- a/modules/audio_processing/aec3/residual_echo_estimator.cc
++++ b/modules/audio_processing/aec3/residual_echo_estimator.cc
+@@ -84,22 +84,6 @@ void LinearEstimate(
+   }
+ }
+ 
+-// Estimates the residual echo power based on an uncertainty estimate of the
+-// echo return loss enhancement (ERLE) and the linear power estimate.
+-void LinearEstimate(
+-    rtc::ArrayView<const std::array<float, kFftLengthBy2Plus1>> S2_linear,
+-    float erle_uncertainty,
+-    rtc::ArrayView<std::array<float, kFftLengthBy2Plus1>> R2) {
+-  RTC_DCHECK_EQ(S2_linear.size(), R2.size());
+-
+-  const size_t num_capture_channels = R2.size();
+-  for (size_t ch = 0; ch < num_capture_channels; ++ch) {
+-    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+-      R2[ch][k] = S2_linear[ch][k] * erle_uncertainty;
+-    }
+-  }
+-}
+-
+ // Estimates the residual echo power based on the estimate of the echo path
+ // gain.
+ void NonLinearEstimate(
+@@ -201,12 +185,7 @@ void ResidualEchoEstimator::Estimate(
+         std::copy(Y2[ch].begin(), Y2[ch].end(), R2[ch].begin());
+       }
+     } else {
+-      absl::optional<float> erle_uncertainty = aec_state.ErleUncertainty();
+-      if (erle_uncertainty) {
+-        LinearEstimate(S2_linear, *erle_uncertainty, R2);
+-      } else {
+-        LinearEstimate(S2_linear, aec_state.Erle(), R2);
+-      }
++      LinearEstimate(S2_linear, aec_state.Erle(), R2);
+     }
+ 
+     AddReverb(ReverbType::kLinear, aec_state, render_buffer, R2);

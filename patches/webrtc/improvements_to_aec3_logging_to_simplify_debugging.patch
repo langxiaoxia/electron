@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustaf Ullberg <gustaf@webrtc.org>
+Date: Wed, 19 May 2021 15:25:18 +0200
+Subject: Improvements to AEC3 logging to simplify debugging
+
+Adds log messages for
+- AEC3 creation
+- Transparent mode implementation selection
+- Config parameter changes via RetrieveFieldTrialValue
+
+Bug: webrtc:8671
+Change-Id: Ibb1e76d66975a3a3c1227e31b9916a17b76e6c29
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/219468
+Reviewed-by: Jesus de Vicente Pena <devicentepena@webrtc.org>
+Commit-Queue: Gustaf Ullberg <gustaf@webrtc.org>
+Cr-Commit-Position: refs/heads/master@{#34056}
+(cherry picked from commit 398def6828311a3b4b7534f015296462ff2bf45c)
+
+diff --git a/modules/audio_processing/aec3/echo_canceller3.cc b/modules/audio_processing/aec3/echo_canceller3.cc
+index 4e4632ddaff30b7e16798810255b51480ecef773..181b649f6d0679404be9d53da982581e47854b54 100644
+--- a/modules/audio_processing/aec3/echo_canceller3.cc
++++ b/modules/audio_processing/aec3/echo_canceller3.cc
+@@ -49,7 +49,11 @@ void RetrieveFieldTrialValue(const char* trial_name,
+   ParseFieldTrial({&field_trial_param}, field_trial_str);
+   float field_trial_value = static_cast<float>(field_trial_param.Get());
+ 
+-  if (field_trial_value >= min && field_trial_value <= max) {
++  if (field_trial_value >= min && field_trial_value <= max &&
++      field_trial_value != *value_to_update) {
++    RTC_LOG(LS_INFO) << "Key " << trial_name
++                     << " changing AEC3 parameter value from "
++                     << *value_to_update << " to " << field_trial_value;
+     *value_to_update = field_trial_value;
+   }
+ }
+@@ -65,7 +69,11 @@ void RetrieveFieldTrialValue(const char* trial_name,
+   ParseFieldTrial({&field_trial_param}, field_trial_str);
+   float field_trial_value = field_trial_param.Get();
+ 
+-  if (field_trial_value >= min && field_trial_value <= max) {
++  if (field_trial_value >= min && field_trial_value <= max &&
++      field_trial_value != *value_to_update) {
++    RTC_LOG(LS_INFO) << "Key " << trial_name
++                     << " changing AEC3 parameter value from "
++                     << *value_to_update << " to " << field_trial_value;
+     *value_to_update = field_trial_value;
+   }
+ }
+@@ -737,6 +745,10 @@ EchoCanceller3::EchoCanceller3(const EchoCanceller3Config& config,
+         std::vector<std::vector<rtc::ArrayView<float>>>(
+             1, std::vector<rtc::ArrayView<float>>(num_capture_channels_));
+   }
++
++  RTC_LOG(LS_INFO) << "AEC3 created with sample rate: " << sample_rate_hz_
++                   << " Hz, num render channels: " << num_render_channels_
++                   << ", num capture channels: " << num_capture_channels_;
+ }
+ 
+ EchoCanceller3::~EchoCanceller3() = default;
+diff --git a/modules/audio_processing/aec3/transparent_mode.cc b/modules/audio_processing/aec3/transparent_mode.cc
+index 7cfa3e8eae9461ae215c6940670440218175addb..489f53f4f1f2ef9d8756a2778f64d8a9545b79d4 100644
+--- a/modules/audio_processing/aec3/transparent_mode.cc
++++ b/modules/audio_processing/aec3/transparent_mode.cc
+@@ -11,6 +11,7 @@
+ #include "modules/audio_processing/aec3/transparent_mode.h"
+ 
+ #include "rtc_base/checks.h"
++#include "rtc_base/logging.h"
+ #include "system_wrappers/include/field_trial.h"
+ 
+ namespace webrtc {
+@@ -228,11 +229,14 @@ class LegacyTransparentModeImpl : public TransparentMode {
+ std::unique_ptr<TransparentMode> TransparentMode::Create(
+     const EchoCanceller3Config& config) {
+   if (config.ep_strength.bounded_erl || DeactivateTransparentMode()) {
++    RTC_LOG(LS_INFO) << "AEC3 Transparent Mode: Disabled";
+     return nullptr;
+   }
+   if (ActivateTransparentModeHmm()) {
++    RTC_LOG(LS_INFO) << "AEC3 Transparent Mode: HMM";
+     return std::make_unique<TransparentModeImpl>();
+   }
++  RTC_LOG(LS_INFO) << "AEC3 Transparent Mode: Legacy";
+   return std::make_unique<LegacyTransparentModeImpl>(config);
+ }
+ 

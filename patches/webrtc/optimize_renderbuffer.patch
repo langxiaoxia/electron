@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: cschuldt <cschuldt@google.com>
+Date: Mon, 29 Nov 2021 16:56:37 +0100
+Subject: Optimize RenderBuffer.
+
+Changing to an index for-loop (instead of using std::transform) allows the compiler (clang for x86 at least) to use 3 different registers in the loop rather than just 1, resulting in less pipeline stall (I'd assume). Interestingly, the compiler unrolls the loop(s) completely in both cases.
+
+Bug: None
+Change-Id: I586773bc525e91bb6eb6638d5399928482306b9f
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/239364
+Reviewed-by: Ivo Creusen <ivoc@webrtc.org>
+Commit-Queue: Christian Schuldt <cschuldt@google.com>
+Cr-Commit-Position: refs/heads/main@{#35453}
+(cherry picked from commit 794cc227dc9110fa89e36c5e6e9827d40d3046f0)
+
+diff --git a/modules/audio_processing/aec3/render_buffer.cc b/modules/audio_processing/aec3/render_buffer.cc
+index 60ea69cce1ee6b51218bc179b031187f9f7a820e..aa511e2b6b588c9586012981f5690df1069ef787 100644
+--- a/modules/audio_processing/aec3/render_buffer.cc
++++ b/modules/audio_processing/aec3/render_buffer.cc
+@@ -42,8 +42,9 @@ void RenderBuffer::SpectralSum(
+   int position = spectrum_buffer_->read;
+   for (size_t j = 0; j < num_spectra; ++j) {
+     for (const auto& channel_spectrum : spectrum_buffer_->buffer[position]) {
+-      std::transform(X2->begin(), X2->end(), channel_spectrum.begin(),
+-                     X2->begin(), std::plus<float>());
++      for (size_t k = 0; k < X2->size(); ++k) {
++        (*X2)[k] += channel_spectrum[k];
++      }
+     }
+     position = spectrum_buffer_->IncIndex(position);
+   }
+@@ -60,18 +61,18 @@ void RenderBuffer::SpectralSums(
+   size_t j = 0;
+   for (; j < num_spectra_shorter; ++j) {
+     for (const auto& channel_spectrum : spectrum_buffer_->buffer[position]) {
+-      std::transform(X2_shorter->begin(), X2_shorter->end(),
+-                     channel_spectrum.begin(), X2_shorter->begin(),
+-                     std::plus<float>());
++      for (size_t k = 0; k < X2_shorter->size(); ++k) {
++        (*X2_shorter)[k] += channel_spectrum[k];
++      }
+     }
+     position = spectrum_buffer_->IncIndex(position);
+   }
+   std::copy(X2_shorter->begin(), X2_shorter->end(), X2_longer->begin());
+   for (; j < num_spectra_longer; ++j) {
+     for (const auto& channel_spectrum : spectrum_buffer_->buffer[position]) {
+-      std::transform(X2_longer->begin(), X2_longer->end(),
+-                     channel_spectrum.begin(), X2_longer->begin(),
+-                     std::plus<float>());
++      for (size_t k = 0; k < X2_longer->size(); ++k) {
++        (*X2_longer)[k] += channel_spectrum[k];
++      }
+     }
+     position = spectrum_buffer_->IncIndex(position);
+   }

@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustaf Ullberg <gustaf@webrtc.org>
+Date: Tue, 12 Oct 2021 09:12:52 +0200
+Subject: AEC3: Enable unbounded echo spectrum for dominant nearend detection
+ by default
+
+This change improves echo canceller transparency by enabling the use
+of a non-capped ERLE when computing the residual echo spectrum for
+dominant nearend detection.
+
+Experimentation has shown that the feature improves echo canceller
+transparency and user ratings.
+
+Implementation CL:
+https://webrtc-review.googlesource.com/c/src/+/221920
+
+Bug: webrtc:12870
+Change-Id: I7dc66810e8300cd35321bcd5b9fae9bc3386836d
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/234841
+Reviewed-by: Jesus de Vicente Pena <devicentepena@webrtc.org>
+Commit-Queue: Gustaf Ullberg <gustaf@webrtc.org>
+Cr-Commit-Position: refs/heads/main@{#35186}
+(cherry picked from commit 468bf9ac7f8ac5c91134e0c410a2b8ba0b77e23b)
+
+diff --git a/api/audio/echo_canceller3_config.h b/api/audio/echo_canceller3_config.h
+index 0df64508726c08ef1e543c5705c37ecb0f5c72fb..c2ee79772732a682ab337b9b29143732778fbf58 100644
+--- a/api/audio/echo_canceller3_config.h
++++ b/api/audio/echo_canceller3_config.h
+@@ -209,6 +209,7 @@ struct RTC_EXPORT EchoCanceller3Config {
+       int hold_duration = 50;
+       int trigger_threshold = 12;
+       bool use_during_initial_phase = true;
++      bool use_unbounded_echo_spectrum = true;
+     } dominant_nearend_detection;
+ 
+     struct SubbandNearendDetection {
+diff --git a/api/audio/echo_canceller3_config_json.cc b/api/audio/echo_canceller3_config_json.cc
+index 3382c46f3cd7c8dc75639c05f679b7c42d3a18d5..7ecd3f0483ad1bf5a1e997b9b0cc63cfd8677707 100644
+--- a/api/audio/echo_canceller3_config_json.cc
++++ b/api/audio/echo_canceller3_config_json.cc
+@@ -368,6 +368,9 @@ void Aec3ConfigFromJsonString(absl::string_view json_string,
+       ReadParam(
+           subsection, "use_during_initial_phase",
+           &cfg.suppressor.dominant_nearend_detection.use_during_initial_phase);
++      ReadParam(subsection, "use_unbounded_echo_spectrum",
++                &cfg.suppressor.dominant_nearend_detection
++                     .use_unbounded_echo_spectrum);
+     }
+ 
+     if (rtc::GetValueFromJsonObject(section, "subband_nearend_detection",
+@@ -678,20 +681,20 @@ std::string Aec3ConfigToJsonString(const EchoCanceller3Config& config) {
+       << config.suppressor.last_lf_smoothing_band << ",";
+   ost << "\"last_lf_band\": " << config.suppressor.last_lf_band << ",";
+   ost << "\"first_hf_band\": " << config.suppressor.first_hf_band << ",";
+-  ost << "\"dominant_nearend_detection\": {";
+-  ost << "\"enr_threshold\": "
+-      << config.suppressor.dominant_nearend_detection.enr_threshold << ",";
+-  ost << "\"enr_exit_threshold\": "
+-      << config.suppressor.dominant_nearend_detection.enr_exit_threshold << ",";
+-  ost << "\"snr_threshold\": "
+-      << config.suppressor.dominant_nearend_detection.snr_threshold << ",";
+-  ost << "\"hold_duration\": "
+-      << config.suppressor.dominant_nearend_detection.hold_duration << ",";
+-  ost << "\"trigger_threshold\": "
+-      << config.suppressor.dominant_nearend_detection.trigger_threshold << ",";
+-  ost << "\"use_during_initial_phase\": "
+-      << config.suppressor.dominant_nearend_detection.use_during_initial_phase;
+-  ost << "},";
++  {
++    const auto& dnd = config.suppressor.dominant_nearend_detection;
++    ost << "\"dominant_nearend_detection\": {";
++    ost << "\"enr_threshold\": " << dnd.enr_threshold << ",";
++    ost << "\"enr_exit_threshold\": " << dnd.enr_exit_threshold << ",";
++    ost << "\"snr_threshold\": " << dnd.snr_threshold << ",";
++    ost << "\"hold_duration\": " << dnd.hold_duration << ",";
++    ost << "\"trigger_threshold\": " << dnd.trigger_threshold << ",";
++    ost << "\"use_during_initial_phase\": " << dnd.use_during_initial_phase
++        << ",";
++    ost << "\"use_unbounded_echo_spectrum\": "
++        << dnd.use_unbounded_echo_spectrum;
++    ost << "},";
++  }
+   ost << "\"subband_nearend_detection\": {";
+   ost << "\"nearend_average_blocks\": "
+       << config.suppressor.subband_nearend_detection.nearend_average_blocks
+diff --git a/modules/audio_processing/aec3/suppression_gain.cc b/modules/audio_processing/aec3/suppression_gain.cc
+index 6405d71c2d4c38118d1816550c8fa376a888e6de..14366f1aec4ae88853d35e6260a5823aece3999d 100644
+--- a/modules/audio_processing/aec3/suppression_gain.cc
++++ b/modules/audio_processing/aec3/suppression_gain.cc
+@@ -28,10 +28,6 @@
+ namespace webrtc {
+ namespace {
+ 
+-bool UseUnboundedEchoSpectrum() {
+-  return field_trial::IsEnabled("WebRTC-Aec3UseUnboundedEchoSpectrum");
+-}
+-
+ void LimitLowFrequencyGains(std::array<float, kFftLengthBy2Plus1>* gain) {
+   // Limit the low frequency gains to avoid the impact of the high-pass filter
+   // on the lower-frequency gain influencing the overall achieved gain.
+@@ -348,7 +344,8 @@ SuppressionGain::SuppressionGain(const EchoCanceller3Config& config,
+       normal_params_(config_.suppressor.last_lf_band,
+                      config_.suppressor.first_hf_band,
+                      config_.suppressor.normal_tuning),
+-      use_unbounded_echo_spectrum_(UseUnboundedEchoSpectrum()) {
++      use_unbounded_echo_spectrum_(config.suppressor.dominant_nearend_detection
++                                       .use_unbounded_echo_spectrum) {
+   RTC_DCHECK_LT(0, state_change_duration_blocks_);
+   last_gain_.fill(1.f);
+   if (config_.suppressor.use_subband_nearend_detection) {
+@@ -382,7 +379,7 @@ void SuppressionGain::GetGain(
+   RTC_DCHECK(high_bands_gain);
+   RTC_DCHECK(low_band_gain);
+ 
+-  // Choose residual echo spectrum for the dominant nearend detector.
++  // Choose residual echo spectrum for dominant nearend detection.
+   const auto echo = use_unbounded_echo_spectrum_
+                         ? residual_echo_spectrum_unbounded
+                         : residual_echo_spectrum;

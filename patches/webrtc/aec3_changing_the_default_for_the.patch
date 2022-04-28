@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jes=C3=BAs=20de=20Vicente=20Pe=C3=B1a?=
+ <devicentepena@webrtc.org>
+Date: Mon, 20 Dec 2021 14:06:45 +0100
+Subject: AEC3: Changing the default for the
+ use_conservative_tail_frequency_response flag.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bug: webrtc:13173
+Change-Id: If53ca45b28690d7d2ed744508b5a2ef7c8448172
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/241783
+Reviewed-by: Per Åhgren <peah@webrtc.org>
+Commit-Queue: Jesus de Vicente Pena <devicentepena@webrtc.org>
+Cr-Commit-Position: refs/heads/main@{#35561}
+(cherry picked from commit 875df7e14027098907f2819841ce3d4c6d21471a)
+
+diff --git a/api/audio/echo_canceller3_config.h b/api/audio/echo_canceller3_config.h
+index c2ee79772732a682ab337b9b29143732778fbf58..1fd403652a25972cfc7cb31c86d489a3658d05e6 100644
+--- a/api/audio/echo_canceller3_config.h
++++ b/api/audio/echo_canceller3_config.h
+@@ -112,7 +112,7 @@ struct RTC_EXPORT EchoCanceller3Config {
+     bool echo_can_saturate = true;
+     bool bounded_erl = false;
+     bool erle_onset_compensation_in_dominant_nearend = false;
+-    bool use_conservative_tail_frequency_response = false;
++    bool use_conservative_tail_frequency_response = true;
+   } ep_strength;
+ 
+   struct EchoAudibility {
+diff --git a/modules/audio_processing/aec3/echo_canceller3.cc b/modules/audio_processing/aec3/echo_canceller3.cc
+index 8a236e9d5eda9df3a3dd3d1f0e75bcaa953d6a8b..a9295758356315500e3b007693625195b730a47a 100644
+--- a/modules/audio_processing/aec3/echo_canceller3.cc
++++ b/modules/audio_processing/aec3/echo_canceller3.cc
+@@ -290,6 +290,11 @@ EchoCanceller3Config AdjustConfig(const EchoCanceller3Config& config) {
+     adjusted_cfg.ep_strength.use_conservative_tail_frequency_response = true;
+   }
+ 
++  if (field_trial::IsDisabled("WebRTC-Aec3ConservativeTailFreqResponse")) {
++    adjusted_cfg.ep_strength.use_conservative_tail_frequency_response = false;
++  }
++
++
+   if (field_trial::IsEnabled("WebRTC-Aec3ShortHeadroomKillSwitch")) {
+     // Two blocks headroom.
+     adjusted_cfg.delay.delay_headroom_samples = kBlockSize * 2;
+diff --git a/resources/audio_processing/output_data_float.pb.sha1 b/resources/audio_processing/output_data_float.pb.sha1
+index d3375949acea22bab86fc1169fd2edd7ed961a16..85e628cb764a730f95fcc70896d7923bb6d0fb92 100644
+--- a/resources/audio_processing/output_data_float.pb.sha1
++++ b/resources/audio_processing/output_data_float.pb.sha1
+@@ -1 +1 @@
+-749efdfd1e3c3ace434b3673dac9ce4938534449
+\ No newline at end of file
++d7dadc14736be65465a79054ce29413cd4cc1ccd
+\ No newline at end of file
+diff --git a/resources/audio_processing/output_data_float_avx2.pb.sha1 b/resources/audio_processing/output_data_float_avx2.pb.sha1
+index 79a95efc0e24b957034794be2d78fb3fa979c3ca..63f988726597bb555cd3633d4fa41a367aaf003b 100644
+--- a/resources/audio_processing/output_data_float_avx2.pb.sha1
++++ b/resources/audio_processing/output_data_float_avx2.pb.sha1
+@@ -1 +1 @@
+-78c1a84de332173863c997538aa19b8cdcba5020
+\ No newline at end of file
++40df0b4e636bb59fe258b93f8aab7fd2d3f6440d
+\ No newline at end of file

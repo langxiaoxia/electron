@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Per=20=C3=85hgren?= <peah@webrtc.org>
+Date: Fri, 7 May 2021 23:19:11 +0000
+Subject: Increase the bound for the value of the filter reset block interval
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Bug: b/177359044
+Change-Id: Id42022b42cad81a3eb2ac42b565d84f691448605
+Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/217890
+Reviewed-by: Gustaf Ullberg <gustaf@webrtc.org>
+Commit-Queue: Per Åhgren <peah@webrtc.org>
+Cr-Commit-Position: refs/heads/master@{#34050}
+(cherry picked from commit 3de40670927f20d4169fb7e63622f038a08c538f)
+
+diff --git a/api/audio/echo_canceller3_config.cc b/api/audio/echo_canceller3_config.cc
+index 5f1923e90f0700349add88aed653165ce448b0ab..4cb75043d6fd4babb674b128015a8f7bbfb9cf29 100644
+--- a/api/audio/echo_canceller3_config.cc
++++ b/api/audio/echo_canceller3_config.cc
+@@ -153,7 +153,7 @@ bool EchoCanceller3Config::Validate(EchoCanceller3Config* config) {
+ 
+   res = res & Limit(&c->filter.config_change_duration_blocks, 0, 100000);
+   res = res & Limit(&c->filter.initial_state_seconds, 0.f, 100.f);
+-  res = res & Limit(&c->filter.coarse_reset_hangover_blocks, 0, 2500);
++  res = res & Limit(&c->filter.coarse_reset_hangover_blocks, 0, 250000);
+ 
+   res = res & Limit(&c->erle.min, 1.f, 100000.f);
+   res = res & Limit(&c->erle.max_l, 1.f, 100000.f);
