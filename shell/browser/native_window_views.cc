@@ -1106,11 +1106,50 @@ void NativeWindowViews::SetIgnoreMouseEvents(bool ignore, bool forward) {
 #endif
 }
 
+//+by xxlang@2022-06-27 {
+#if defined(OS_WIN)
+struct WINCOMPATTRDATA {
+  DWORD attribute;
+  PVOID pData;
+  ULONG dataSize;
+};
+
+typedef BOOL(WINAPI* SetWindowCompositionAttributeFunc)(
+    HWND hwnd,
+    WINCOMPATTRDATA* pAttrData);
+
+bool SetExcludedFromDDA(HWND window, BOOL bFlag) {
+  HMODULE user32 = LoadLibraryW(L"user32.dll");
+  if (user32 == NULL) {
+    return false;
+  }
+
+  SetWindowCompositionAttributeFunc set_window_composition_attribute_func =
+      (SetWindowCompositionAttributeFunc)GetProcAddress(
+          user32, "SetWindowCompositionAttribute");
+  if (set_window_composition_attribute_func == NULL) {
+    FreeLibrary(user32);
+    return false;
+  }
+
+  WINCOMPATTRDATA data = {24, &bFlag, sizeof(bFlag)};  // WCA_EXCLUDED_FROM_DDA
+  if (!set_window_composition_attribute_func(window, &data)) {
+    FreeLibrary(user32);
+    return false;
+  }
+
+  FreeLibrary(user32);
+  return true;
+}
+#endif
+//+by xxlang@2022-06-27 }
+
 void NativeWindowViews::SetContentProtection(bool enable) {
 #if defined(OS_WIN)
   HWND hwnd = GetAcceleratedWidget();
   DWORD affinity = enable ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
   ::SetWindowDisplayAffinity(hwnd, affinity);
+  SetExcludedFromDDA(hwnd, TRUE);  //+by xxlang@2022-06-27
   if (!layered_) {
     // Workaround to prevent black window on screen capture after hiding and
     // showing the BrowserWindow.
