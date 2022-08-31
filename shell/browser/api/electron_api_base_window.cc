@@ -226,6 +226,9 @@ void BaseWindow::OnWindowWillMove(const gfx::Rect& new_bounds,
   if (Emit("will-move", new_bounds)) {
     *prevent_default = true;
   }
+#if defined(OS_MAC)
+  is_moving_ = true; //+by xxlang : fix macOS emit moved event.
+#endif
 }
 
 void BaseWindow::OnWindowMove() {

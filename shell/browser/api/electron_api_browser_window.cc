@@ -131,6 +131,16 @@ void BrowserWindow::OnInputEvent(const blink::WebInputEvent& event) {
     case blink::WebInputEvent::Type::kGestureScrollEnd:
       Emit("scroll-touch-edge");
       break;
+    //+by xxlang : fix macOS emit moved event. {
+#if defined(OS_MAC)
+    case blink::WebInputEvent::Type::kMouseUp:
+      if (is_moving_) {
+        is_moving_ = false;
+        OnWindowMoved();
+      }
+      break;
+#endif
+    //+by xxlang : fix macOS emit moved event. }
     default:
       break;
   }

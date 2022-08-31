@@ -277,6 +277,10 @@ class BaseWindow : public gin_helper::TrackableObject<BaseWindow>,
   // Reference to JS wrapper to prevent garbage collection.
   v8::Global<v8::Value> self_ref_;
 
+#if defined(OS_MAC)
+  bool is_moving_ = false; //+by xxlang : fix macOS emit moved event.
+#endif
+
   base::WeakPtrFactory<BaseWindow> weak_factory_{this};
 };
 

@@ -183,7 +183,7 @@ using FullScreenTransitionState =
   // TODO(zcbenz): Remove the alias after figuring out a proper
   // way to dispatch move.
   shell_->NotifyWindowMove();
-  shell_->NotifyWindowMoved();
+  // shell_->NotifyWindowMoved(); //-by xxlang : fix macOS emit moved event.
 }
 
 - (void)windowWillMiniaturize:(NSNotification*)notification {
