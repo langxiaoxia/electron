@@ -2739,7 +2739,7 @@ index f539d9056dcc63d752cfe4fda70ff8703da00e05..9bfdc55a98e954d46baab54989d276d9
        submodules_.noise_suppressor->RnnoiseAppliable(*audio_rnnoise)) {
      audio_rnnoise->set_num_channels(audio->num_channels());
 diff --git a/modules/pacing/pacing_controller.cc b/modules/pacing/pacing_controller.cc
-index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee0a5c4ab5 100644
+index e0ace4e65e59b0c880de0868148ad1acd10e2c05..e920607f7b2294f6b981696f971493761d6a5e6b 100644
 --- a/modules/pacing/pacing_controller.cc
 +++ b/modules/pacing/pacing_controller.cc
 @@ -19,6 +19,7 @@
@@ -2791,11 +2791,12 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
  
      if (rtp_packet == nullptr) {
        // No packet available to send, check if we should send padding.
-@@ -568,6 +581,19 @@ void PacingController::ProcessPackets() {
+@@ -568,6 +581,20 @@ void PacingController::ProcessPackets() {
      RTC_DCHECK(rtp_packet);
      RTC_DCHECK(rtp_packet->packet_type().has_value());
      const RtpPacketMediaType packet_type = *rtp_packet->packet_type();
 +
++    //+by xxlang : gsfec {
 +    if (rtp_packet->fec_protect_packet()) {
 +      if (gsfec_audio_ && packet_type == RtpPacketMediaType::kAudio) {
 +        rtp_packet = ProcessAudioFec(std::move(rtp_packet));
@@ -2811,7 +2812,7 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
      DataSize packet_size = DataSize::Bytes(rtp_packet->payload_size() +
                                             rtp_packet->padding_size());
  
-@@ -577,8 +603,10 @@ void PacingController::ProcessPackets() {
+@@ -577,8 +604,10 @@ void PacingController::ProcessPackets() {
      }
  
      packet_sender_->SendPacket(std::move(rtp_packet), pacing_info);
@@ -2824,7 +2825,7 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
      }
      data_sent += packet_size;
  
-@@ -613,6 +641,102 @@ void PacingController::ProcessPackets() {
+@@ -613,6 +642,105 @@ void PacingController::ProcessPackets() {
    }
  }
  
@@ -2850,6 +2851,8 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
 +
 +  // Send remaining FEC packets after RED packet.
 +  for (auto& packet : fec_packets) {
++    // Set GS-FEC sequence number.
++    packet_sender_->SequenceAudioFec(packet.get());
 +    EnqueuePacket(std::move(packet));
 +  }
 +
@@ -2903,6 +2906,7 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
 +    return rtp_packet;
 +  }
 +
++  // Keep RED sequence number and timestamp with audio.
 +  std::unique_ptr<RtpPacketToSend> red_packet = std::make_unique<RtpPacketToSend>(*rtp_packet.get());
 +  red_packet->SetPayloadType(rtp_packet->red_payload_type());
 +  red_packet->SetMarker(false);
@@ -2928,10 +2932,10 @@ index e0ace4e65e59b0c880de0868148ad1acd10e2c05..7622e1b4f26351ce865e7f44e27fdaee
                                          DataSize data_sent) const {
    if (!packet_queue_.Empty()) {
 diff --git a/modules/pacing/pacing_controller.h b/modules/pacing/pacing_controller.h
-index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..155f1317cd7b0a02117673923e63b62fc6c0b959 100644
+index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..ececeeae41581b9dbe480ed24b448376ca418b63 100644
 --- a/modules/pacing/pacing_controller.h
 +++ b/modules/pacing/pacing_controller.h
-@@ -54,10 +54,12 @@ class PacingController {
+@@ -54,10 +54,13 @@ class PacingController {
    class PacketSender {
     public:
      virtual ~PacketSender() = default;
@@ -2941,10 +2945,11 @@ index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..155f1317cd7b0a02117673923e63b62f
      // Should be called after each call to SendPacket().
      virtual std::vector<std::unique_ptr<RtpPacketToSend>> FetchFec() = 0;
 +    virtual std::vector<std::unique_ptr<RtpPacketToSend>> FetchAudioFec() = 0; //+by xxlang : gsfec
++    virtual bool SequenceAudioFec(RtpPacketToSend* fec_packet) = 0; //+by xxlang : gsfec
      virtual std::vector<std::unique_ptr<RtpPacketToSend>> GeneratePadding(
          DataSize size) = 0;
    };
-@@ -173,6 +175,14 @@ class PacingController {
+@@ -173,6 +176,14 @@ class PacingController {
  
    Timestamp CurrentTime() const;
  
@@ -2959,7 +2964,7 @@ index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..155f1317cd7b0a02117673923e63b62f
    const ProcessMode mode_;
    Clock* const clock_;
    PacketSender* const packet_sender_;
-@@ -186,6 +196,8 @@ class PacingController {
+@@ -186,6 +197,8 @@ class PacingController {
    // In dynamic mode, indicates the target size when requesting padding,
    // expressed as a duration in order to adjust for varying padding rate.
    const TimeDelta padding_target_duration_;
@@ -2968,7 +2973,7 @@ index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..155f1317cd7b0a02117673923e63b62f
  
    TimeDelta min_packet_limit_;
  
-@@ -231,6 +243,8 @@ class PacingController {
+@@ -231,6 +244,8 @@ class PacingController {
    TimeDelta queue_time_limit;
    bool account_for_audio_;
    bool include_overhead_;
@@ -2978,7 +2983,7 @@ index b0bdfb2e4264d05aa4bcebbd1fd6075821f6e685..155f1317cd7b0a02117673923e63b62f
  }  // namespace webrtc
  
 diff --git a/modules/pacing/packet_router.cc b/modules/pacing/packet_router.cc
-index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..8d4801a1445f212fe1de4714102fcf5fcc03d22a 100644
+index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..a14b6a94fe5381241dd5a2756e7a4cdf5a6d056d 100644
 --- a/modules/pacing/packet_router.cc
 +++ b/modules/pacing/packet_router.cc
 @@ -62,7 +62,9 @@ void PacketRouter::AddSendRtpModule(RtpRtcpInterface* rtp_module,
@@ -3003,7 +3008,7 @@ index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..8d4801a1445f212fe1de4714102fcf5f
    }
  
    if (last_send_module_ == rtp_module) {
-@@ -172,11 +176,70 @@ void PacketRouter::SendPacket(std::unique_ptr<RtpPacketToSend> packet,
+@@ -172,10 +176,82 @@ void PacketRouter::SendPacket(std::unique_ptr<RtpPacketToSend> packet,
      last_send_module_ = rtp_module;
    }
  
@@ -3011,7 +3016,7 @@ index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..8d4801a1445f212fe1de4714102fcf5f
 -    pending_fec_packets_.push_back(std::move(packet));
 +  absl::optional<VideoFecGenerator::FecType> fec_type = rtp_module->GetFecType();
 +  if (rtp_module->IsAudioConfigured() && fec_type && *fec_type == VideoFecGenerator::FecType::kGsFec) {
-+    GroupAudioFec(rtp_module->FetchFecPackets());
++    GroupAudioFec(rtp_module->FetchFecPackets()); //+by xxlang : gsfec
 +  } else {
 +    for (auto& packet : rtp_module->FetchFecPackets()) {
 +      pending_fec_packets_.push_back(std::move(packet));
@@ -3058,9 +3063,9 @@ index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..8d4801a1445f212fe1de4714102fcf5f
 +
 +  for (size_t i = 0; i < group_count; i++) {
 +    pending_audio_fec_packets_.push_back(std::move(group_packets[i]));
-   }
- }
- 
++  }
++}
++
 +std::vector<std::unique_ptr<RtpPacketToSend>> PacketRouter::FetchAudioFec() {
 +  MutexLock lock(&modules_mutex_);
 +  std::vector<std::unique_ptr<RtpPacketToSend>> fec_packets;
@@ -3071,24 +3076,37 @@ index 5317f510c9b0dab4b7d82dbb69d8cd4d7735aaa0..8d4801a1445f212fe1de4714102fcf5f
 +  pending_audio_fec_packets_.pop_front();
 +  return fec_packets;
 +}
-+//+by xxlang : gsfec }
 +
++bool PacketRouter::SequenceAudioFec(RtpPacketToSend* fec_packet) {
++  MutexLock lock(&modules_mutex_);
++
++  uint32_t ssrc = fec_packet->Ssrc();
++  auto kv = send_modules_map_.find(ssrc);
++  if (kv == send_modules_map_.end()) {
++    return false;
+   }
++
++  RtpRtcpInterface* rtp_module = kv->second;
++  return rtp_module->SequenceAudioFec(fec_packet);
+ }
++//+by xxlang : gsfec }
+ 
  std::vector<std::unique_ptr<RtpPacketToSend>> PacketRouter::FetchFec() {
    MutexLock lock(&modules_mutex_);
-   std::vector<std::unique_ptr<RtpPacketToSend>> fec_packets =
 diff --git a/modules/pacing/packet_router.h b/modules/pacing/packet_router.h
-index 2fa104b4cdb1255389307355754c78e30728bacc..c1fd4e64e44bbeef11124bd370d6d23707fc1248 100644
+index 2fa104b4cdb1255389307355754c78e30728bacc..1b8fc7b863689209d4f03dcdc014ecbe8ba547f6 100644
 --- a/modules/pacing/packet_router.h
 +++ b/modules/pacing/packet_router.h
-@@ -57,6 +57,7 @@ class PacketRouter : public RemoteBitrateObserver,
+@@ -57,6 +57,8 @@ class PacketRouter : public RemoteBitrateObserver,
    void SendPacket(std::unique_ptr<RtpPacketToSend> packet,
                    const PacedPacketInfo& cluster_info) override;
    std::vector<std::unique_ptr<RtpPacketToSend>> FetchFec() override;
 +  std::vector<std::unique_ptr<RtpPacketToSend>> FetchAudioFec() override; //+by xxlang : gsfec
++  bool SequenceAudioFec(RtpPacketToSend* fec_packet) override; //+by xxlang : gsfec
    std::vector<std::unique_ptr<RtpPacketToSend>> GeneratePadding(
        DataSize size) override;
  
-@@ -95,6 +96,9 @@ class PacketRouter : public RemoteBitrateObserver,
+@@ -95,6 +97,9 @@ class PacketRouter : public RemoteBitrateObserver,
    void RemoveSendRtpModuleFromMap(uint32_t ssrc)
        RTC_EXCLUSIVE_LOCKS_REQUIRED(modules_mutex_);
  
@@ -3098,7 +3116,7 @@ index 2fa104b4cdb1255389307355754c78e30728bacc..c1fd4e64e44bbeef11124bd370d6d237
    mutable Mutex modules_mutex_;
    // Ssrc to RtpRtcpInterface module;
    std::unordered_map<uint32_t, RtpRtcpInterface*> send_modules_map_
-@@ -132,6 +136,8 @@ class PacketRouter : public RemoteBitrateObserver,
+@@ -132,6 +137,8 @@ class PacketRouter : public RemoteBitrateObserver,
    // process thread is gone.
    std::vector<std::unique_ptr<RtpPacketToSend>> pending_fec_packets_
        RTC_GUARDED_BY(modules_mutex_);
@@ -5331,6 +5349,55 @@ index 0000000000000000000000000000000000000000..e82bbe37f338baad2a41434446932546
 +  }
 +}
 +}  // namespace webrtc
+diff --git a/modules/rtp_rtcp/source/packet_sequencer.cc b/modules/rtp_rtcp/source/packet_sequencer.cc
+index 03ea9b8154dacf1077fb7fa6c6070d46acebc2a1..cbe94f419ed02b0092be14a68cba77234197d835 100644
+--- a/modules/rtp_rtcp/source/packet_sequencer.cc
++++ b/modules/rtp_rtcp/source/packet_sequencer.cc
+@@ -32,6 +32,7 @@ PacketSequencer::PacketSequencer(uint32_t media_ssrc,
+       clock_(clock),
+       media_sequence_number_(0),
+       rtx_sequence_number_(0),
++      fec_sequence_number_(0), //+by xxlang : gsfec
+       last_payload_type_(-1),
+       last_rtp_timestamp_(0),
+       last_capture_time_ms_(0),
+@@ -47,7 +48,11 @@ bool PacketSequencer::Sequence(RtpPacketToSend& packet) {
+   }
+ 
+   if (packet.Ssrc() == media_ssrc_) {
+-    packet.SetSequenceNumber(media_sequence_number_++);
++    if (packet.packet_type() == RtpPacketMediaType::kForwardErrorCorrection && fec_sequence_number_.has_value()) { //+by xxlang : gsfec
++      packet.SetSequenceNumber((*fec_sequence_number_)++);
++    } else {
++      packet.SetSequenceNumber(media_sequence_number_++);
++    }
+     if (packet.packet_type() != RtpPacketMediaType::kPadding) {
+       UpdateLastPacketState(packet);
+     }
+diff --git a/modules/rtp_rtcp/source/packet_sequencer.h b/modules/rtp_rtcp/source/packet_sequencer.h
+index 67255164f3ab7cc1076d41d91aeb52067311ac61..7ce1c5bbf1d2f5e4232558c7961b4851386475fb 100644
+--- a/modules/rtp_rtcp/source/packet_sequencer.h
++++ b/modules/rtp_rtcp/source/packet_sequencer.h
+@@ -44,6 +44,11 @@ class PacketSequencer {
+   void set_rtx_sequence_number(uint16_t sequence_number) {
+     rtx_sequence_number_ = sequence_number;
+   }
++  //+by xxlang : gsfec {
++  void set_fec_sequence_number(uint16_t sequence_number) {
++    fec_sequence_number_ = sequence_number;
++  }
++  //+by xxlang : gsfec }
+ 
+   void SetRtpState(const RtpState& state);
+   void PupulateRtpState(RtpState& state) const;
+@@ -62,6 +67,7 @@ class PacketSequencer {
+ 
+   uint16_t media_sequence_number_;
+   uint16_t rtx_sequence_number_;
++  absl::optional<uint16_t> fec_sequence_number_; //+by xxlang : gsfec
+ 
+   int8_t last_payload_type_;
+   uint32_t last_rtp_timestamp_;
 diff --git a/modules/rtp_rtcp/source/rtp_packet_to_send.h b/modules/rtp_rtcp/source/rtp_packet_to_send.h
 index 2411deac4971a4adf7cf2b743da1aef9d9f0fc05..5843c58898fa995e122b1ada4d422a416d0af4f6 100644
 --- a/modules/rtp_rtcp/source/rtp_packet_to_send.h
@@ -5354,18 +5421,16 @@ index 2411deac4971a4adf7cf2b743da1aef9d9f0fc05..5843c58898fa995e122b1ada4d422a41
  
  }  // namespace webrtc
 diff --git a/modules/rtp_rtcp/source/rtp_rtcp_impl.cc b/modules/rtp_rtcp/source/rtp_rtcp_impl.cc
-index fa4af1dedc330378da5e0d010db74472314e2c0e..f2c2991a9c873d7933f2586eb295556d9cb4fb27 100644
+index fa4af1dedc330378da5e0d010db74472314e2c0e..6483b3a5d0bc6f6709e9699eb92f15a7028e484c 100644
 --- a/modules/rtp_rtcp/source/rtp_rtcp_impl.cc
 +++ b/modules/rtp_rtcp/source/rtp_rtcp_impl.cc
-@@ -221,6 +221,15 @@ absl::optional<uint32_t> ModuleRtpRtcpImpl::FlexfecSsrc() const {
+@@ -221,6 +221,13 @@ absl::optional<uint32_t> ModuleRtpRtcpImpl::FlexfecSsrc() const {
    return absl::nullopt;
  }
  
 +//+by xxlang : gsfec {
 +absl::optional<VideoFecGenerator::FecType> ModuleRtpRtcpImpl::GetFecType() const {
-+  if (rtp_sender_) {
-+    return rtp_sender_->packet_generator.GetFecType();
-+  }
++  // GS-FEC not supported in deprecated RTP module.
 +  return absl::nullopt;
 +}
 +//+by xxlang : gsfec }
@@ -5373,8 +5438,21 @@ index fa4af1dedc330378da5e0d010db74472314e2c0e..f2c2991a9c873d7933f2586eb295556d
  void ModuleRtpRtcpImpl::IncomingRtcpPacket(const uint8_t* rtcp_packet,
                                             const size_t length) {
    rtcp_receiver_.IncomingPacket(rtcp_packet, length);
+@@ -399,6 +406,12 @@ bool ModuleRtpRtcpImpl::TrySendPacket(RtpPacketToSend* packet,
+   return true;
+ }
+ 
++//+by xxlang : gsfec {
++void ModuleRtpRtcpImpl::SetFecPayloadType(uint32_t gsfec_ssrc, int gsfec_pt) {
++  // GS-FEC not supported in deprecated RTP module.
++}
++//+by xxlang : gsfec }
++
+ void ModuleRtpRtcpImpl::SetFecProtectionParams(const FecProtectionParams&,
+                                                const FecProtectionParams&) {
+   // Deferred FEC not supported in deprecated RTP module.
 diff --git a/modules/rtp_rtcp/source/rtp_rtcp_impl.h b/modules/rtp_rtcp/source/rtp_rtcp_impl.h
-index 5bcabc57b15886799db8380a01e899bac2e28017..10942d36ec5f5d50a28127987defe6f57ab53f62 100644
+index 5bcabc57b15886799db8380a01e899bac2e28017..5cb256001217d99f5cb617523b70805a83a29ff4 100644
 --- a/modules/rtp_rtcp/source/rtp_rtcp_impl.h
 +++ b/modules/rtp_rtcp/source/rtp_rtcp_impl.h
 @@ -114,6 +114,7 @@ class ModuleRtpRtcpImpl : public RtpRtcp, public RTCPReceiver::ModuleRtpRtcp {
@@ -5385,11 +5463,19 @@ index 5bcabc57b15886799db8380a01e899bac2e28017..10942d36ec5f5d50a28127987defe6f5
  
    // Sends kRtcpByeCode when going from true to false.
    int32_t SetSendingStatus(bool sending) override;
+@@ -137,6 +138,7 @@ class ModuleRtpRtcpImpl : public RtpRtcp, public RTCPReceiver::ModuleRtpRtcp {
+   bool TrySendPacket(RtpPacketToSend* packet,
+                      const PacedPacketInfo& pacing_info) override;
+ 
++  void SetFecPayloadType(uint32_t gsfec_ssrc, int gsfec_pt) override; //+by xxlang : gsfec
+   void SetFecProtectionParams(const FecProtectionParams& delta_params,
+                               const FecProtectionParams& key_params) override;
+ 
 diff --git a/modules/rtp_rtcp/source/rtp_rtcp_impl2.cc b/modules/rtp_rtcp/source/rtp_rtcp_impl2.cc
-index 78ccf9907f9094e83f8f959682065856b22364b7..91c530831c46f0f8727fcea6fd3f3600be233e2b 100644
+index 78ccf9907f9094e83f8f959682065856b22364b7..eae5eaaba6667d9081a92b77775ec6d1102d1b78 100644
 --- a/modules/rtp_rtcp/source/rtp_rtcp_impl2.cc
 +++ b/modules/rtp_rtcp/source/rtp_rtcp_impl2.cc
-@@ -167,6 +167,15 @@ absl::optional<uint32_t> ModuleRtpRtcpImpl2::FlexfecSsrc() const {
+@@ -167,6 +167,22 @@ absl::optional<uint32_t> ModuleRtpRtcpImpl2::FlexfecSsrc() const {
    return absl::nullopt;
  }
  
@@ -5400,12 +5486,19 @@ index 78ccf9907f9094e83f8f959682065856b22364b7..91c530831c46f0f8727fcea6fd3f3600
 +  }
 +  return absl::nullopt;
 +}
++
++bool ModuleRtpRtcpImpl2::SequenceAudioFec(RtpPacketToSend* fec_packet) const {
++  if (rtp_sender_) {
++    return rtp_sender_->packet_generator.AssignSequenceNumber(fec_packet);
++  }
++  return false;
++}
 +//+by xxlang : gsfec }
 +
  void ModuleRtpRtcpImpl2::IncomingRtcpPacket(const uint8_t* rtcp_packet,
                                              const size_t length) {
    rtcp_receiver_.IncomingPacket(rtcp_packet, length);
-@@ -349,6 +358,13 @@ bool ModuleRtpRtcpImpl2::TrySendPacket(RtpPacketToSend* packet,
+@@ -349,6 +365,13 @@ bool ModuleRtpRtcpImpl2::TrySendPacket(RtpPacketToSend* packet,
    return true;
  }
  
@@ -5420,18 +5513,19 @@ index 78ccf9907f9094e83f8f959682065856b22364b7..91c530831c46f0f8727fcea6fd3f3600
      const FecProtectionParams& delta_params,
      const FecProtectionParams& key_params) {
 diff --git a/modules/rtp_rtcp/source/rtp_rtcp_impl2.h b/modules/rtp_rtcp/source/rtp_rtcp_impl2.h
-index 00f6ff161dd72b09a90f46e618e1f8461883c463..9a7160cad8bd36e99129358f81ff947c344235bb 100644
+index 00f6ff161dd72b09a90f46e618e1f8461883c463..0860fd7ba56ff9659f6f6a869bcff49f0a9e80c5 100644
 --- a/modules/rtp_rtcp/source/rtp_rtcp_impl2.h
 +++ b/modules/rtp_rtcp/source/rtp_rtcp_impl2.h
-@@ -126,6 +126,7 @@ class ModuleRtpRtcpImpl2 final : public RtpRtcpInterface,
+@@ -126,6 +126,8 @@ class ModuleRtpRtcpImpl2 final : public RtpRtcpInterface,
                               int associated_payload_type) override;
  
    absl::optional<uint32_t> FlexfecSsrc() const override;
 +  absl::optional<VideoFecGenerator::FecType> GetFecType() const override; //+by xxlang : gsfec
++  bool SequenceAudioFec(RtpPacketToSend* fec_packet) const override; //+by xxlang : gsfec
  
    // Sends kRtcpByeCode when going from true to false.
    int32_t SetSendingStatus(bool sending) override;
-@@ -149,6 +150,7 @@ class ModuleRtpRtcpImpl2 final : public RtpRtcpInterface,
+@@ -149,6 +151,7 @@ class ModuleRtpRtcpImpl2 final : public RtpRtcpInterface,
    bool TrySendPacket(RtpPacketToSend* packet,
                       const PacedPacketInfo& pacing_info) override;
  
@@ -5440,20 +5534,22 @@ index 00f6ff161dd72b09a90f46e618e1f8461883c463..9a7160cad8bd36e99129358f81ff947c
                                const FecProtectionParams& key_params) override;
  
 diff --git a/modules/rtp_rtcp/source/rtp_rtcp_interface.h b/modules/rtp_rtcp/source/rtp_rtcp_interface.h
-index 5ab48c9ad4cb5943f59353c5cb31e3d45acd5c04..8f72bedbfdf826a00ead3a1f158eed43925ffd35 100644
+index 5ab48c9ad4cb5943f59353c5cb31e3d45acd5c04..e7ebcdc15093347665dc115e813e80fdcd9d4c02 100644
 --- a/modules/rtp_rtcp/source/rtp_rtcp_interface.h
 +++ b/modules/rtp_rtcp/source/rtp_rtcp_interface.h
-@@ -273,6 +273,9 @@ class RtpRtcpInterface : public RtcpFeedbackSenderInterface {
+@@ -273,6 +273,11 @@ class RtpRtcpInterface : public RtcpFeedbackSenderInterface {
    // Returns the FlexFEC SSRC, if there is one.
    virtual absl::optional<uint32_t> FlexfecSsrc() const = 0;
  
 +  // Returns the FecType, if there is one.
 +  virtual absl::optional<VideoFecGenerator::FecType> GetFecType() const = 0; //+by xxlang : gsfec
 +
++  virtual bool SequenceAudioFec(RtpPacketToSend* fec_packet) const = 0; //+by xxlang : gsfec
++
    // Sets sending status. Sends kRtcpByeCode when going from true to false.
    // Returns -1 on failure else 0.
    virtual int32_t SetSendingStatus(bool sending) = 0;
-@@ -312,6 +315,8 @@ class RtpRtcpInterface : public RtcpFeedbackSenderInterface {
+@@ -312,6 +317,8 @@ class RtpRtcpInterface : public RtcpFeedbackSenderInterface {
    virtual bool TrySendPacket(RtpPacketToSend* packet,
                               const PacedPacketInfo& pacing_info) = 0;
  
@@ -5463,7 +5559,7 @@ index 5ab48c9ad4cb5943f59353c5cb31e3d45acd5c04..8f72bedbfdf826a00ead3a1f158eed43
    // Only used when deferred FEC is active.
    virtual void SetFecProtectionParams(
 diff --git a/modules/rtp_rtcp/source/rtp_sender.cc b/modules/rtp_rtcp/source/rtp_sender.cc
-index 8435e5f33d647695074ea3ce010fe85de10938d2..3cd4ff66b357dd8d215ebd5a3e6383260ec7fd91 100644
+index 8435e5f33d647695074ea3ce010fe85de10938d2..f0bb3f8a9af3643275779a9943904b9861efd49f 100644
 --- a/modules/rtp_rtcp/source/rtp_sender.cc
 +++ b/modules/rtp_rtcp/source/rtp_sender.cc
 @@ -165,6 +165,8 @@ RTPSender::RTPSender(const RtpRtcpInterface::Configuration& config,
@@ -5475,6 +5571,16 @@ index 8435e5f33d647695074ea3ce010fe85de10938d2..3cd4ff66b357dd8d215ebd5a3e638326
        max_padding_size_factor_(GetMaxPaddingSizeFactor(config.field_trials)),
        packet_history_(packet_history),
        paced_sender_(packet_sender),
+@@ -189,6 +191,9 @@ RTPSender::RTPSender(const RtpRtcpInterface::Configuration& config,
+   // Random start, 16 bits. Can't be 0.
+   sequencer_.set_rtx_sequence_number(random_.Rand(1, kMaxInitRtpSeqNumber));
+   sequencer_.set_media_sequence_number(random_.Rand(1, kMaxInitRtpSeqNumber));
++  if (audio_configured_ && fec_type_ == VideoFecGenerator::FecType::kGsFec) {
++    sequencer_.set_fec_sequence_number(random_.Rand(1, kMaxInitRtpSeqNumber));
++  }
+ 
+   RTC_DCHECK(paced_sender_);
+   RTC_DCHECK(packet_history_);
 diff --git a/modules/rtp_rtcp/source/rtp_sender.h b/modules/rtp_rtcp/source/rtp_sender.h
 index fbf135049c8499941c035d2541e7bea23df8d1b2..6b87fd768dcd66c08dc7cee64f4d1c5018530dd0 100644
 --- a/modules/rtp_rtcp/source/rtp_sender.h
