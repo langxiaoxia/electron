@@ -141,7 +141,7 @@ index b769569fd51db36d99b3efbd4a1b8320596e5a49..333af95bbae73d1e18f0b94ee6a082ea
    // Set currently known overhead (used in ANA, opus only).
    // If overhead changes later, it will be updated in UpdateOverheadForEncoder.
 diff --git a/audio/channel_receive.cc b/audio/channel_receive.cc
-index 44a647b7a6af472bdd029988072d34be410d93e0..062afc041c75f2d0256f6177b3499a096152bb45 100644
+index 44a647b7a6af472bdd029988072d34be410d93e0..9613ddb59cfbcd5741397f0fc018e9ee6c24e2fb 100644
 --- a/audio/channel_receive.cc
 +++ b/audio/channel_receive.cc
 @@ -65,12 +65,16 @@ AudioCodingModule::Config AcmConfig(
@@ -186,7 +186,18 @@ index 44a647b7a6af472bdd029988072d34be410d93e0..062afc041c75f2d0256f6177b3499a09
                                jitter_buffer_max_packets,
                                jitter_buffer_fast_playout)),
        _outputAudioLevel(),
-@@ -1053,6 +1061,7 @@ std::unique_ptr<ChannelReceiveInterface> CreateChannelReceive(
+@@ -611,7 +619,9 @@ void ChannelReceive::OnRtpPacket(const RtpPacketReceived& packet) {
+   RtpPacketReceived packet_copy(packet);
+   packet_copy.set_payload_type_frequency(it->second);
+ 
+-  rtp_receive_statistics_->OnRtpPacket(packet_copy);
++  if (!acm_receiver_.IsFec(packet.PayloadType())) { //+by xxlang : gsfec
++    rtp_receive_statistics_->OnRtpPacket(packet_copy);
++  }
+ 
+   RTPHeader header;
+   packet_copy.GetHeader(&header);
+@@ -1053,6 +1063,7 @@ std::unique_ptr<ChannelReceiveInterface> CreateChannelReceive(
      RtcEventLog* rtc_event_log,
      uint32_t local_ssrc,
      uint32_t remote_ssrc,
@@ -194,7 +205,7 @@ index 44a647b7a6af472bdd029988072d34be410d93e0..062afc041c75f2d0256f6177b3499a09
      size_t jitter_buffer_max_packets,
      bool jitter_buffer_fast_playout,
      int jitter_buffer_min_delay_ms,
-@@ -1064,7 +1073,7 @@ std::unique_ptr<ChannelReceiveInterface> CreateChannelReceive(
+@@ -1064,7 +1075,7 @@ std::unique_ptr<ChannelReceiveInterface> CreateChannelReceive(
      rtc::scoped_refptr<FrameTransformerInterface> frame_transformer) {
    return std::make_unique<ChannelReceive>(
        clock, module_process_thread, neteq_factory, audio_device_module,
@@ -2372,7 +2383,7 @@ index 4bc61d540775ad5540fcd7d29ee65019b0b99ebb..24b08d75eef1fff9b099b776cb95538b
  };
  }  // namespace cricket
 diff --git a/modules/audio_coding/acm2/acm_receiver.cc b/modules/audio_coding/acm2/acm_receiver.cc
-index 0e615cae821b149bd3f995470cf6debfff846baa..06ef024f18a51cb23edbc6431cffd7da9b0e87fa 100644
+index 0e615cae821b149bd3f995470cf6debfff846baa..afecaccb838566f9e94b5a3c8d1598e15772bf16 100644
 --- a/modules/audio_coding/acm2/acm_receiver.cc
 +++ b/modules/audio_coding/acm2/acm_receiver.cc
 @@ -20,6 +20,7 @@
@@ -2383,7 +2394,24 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..06ef024f18a51cb23edbc6431cffd7da
  #include "modules/audio_coding/acm2/acm_resampler.h"
  #include "modules/audio_coding/acm2/call_statistics.h"
  #include "modules/audio_coding/neteq/default_neteq_factory.h"
-@@ -108,8 +109,81 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
+@@ -97,6 +98,16 @@ int AcmReceiver::last_output_sample_rate_hz() const {
+   return neteq_->last_output_sample_rate_hz();
+ }
+ 
++//+by xxlang : gsfec {
++bool AcmReceiver::IsFec(int payload_type) const {
++  auto format = neteq_->GetDecoderFormat(payload_type);
++  if (!format) {
++    return false;
++  }
++  return absl::EqualsIgnoreCase(format->sdp_format.name, cricket::kGsfecCodecName);
++}
++//+by xxlang : gsfec }
++
+ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
+                               rtc::ArrayView<const uint8_t> incoming_payload) {
+   if (incoming_payload.empty()) {
+@@ -108,8 +119,81 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
    auto format = neteq_->GetDecoderFormat(payload_type);
    if (format && absl::EqualsIgnoreCase(format->sdp_format.name, "red")) {
      // This is a RED packet. Get the format of the audio codec.
@@ -2465,7 +2493,7 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..06ef024f18a51cb23edbc6431cffd7da
    }
    if (!format) {
      RTC_LOG_F(LS_ERROR) << "Payload-type " << payload_type
-@@ -125,7 +199,7 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
+@@ -125,7 +209,7 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
          // packets into NetEq.
          return 0;
        }
@@ -2474,6 +2502,19 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..06ef024f18a51cb23edbc6431cffd7da
        last_decoder_ = DecoderInfo{/*payload_type=*/payload_type,
                                    /*sample_rate_hz=*/format->sample_rate_hz,
                                    /*num_channels=*/format->num_channels,
+diff --git a/modules/audio_coding/acm2/acm_receiver.h b/modules/audio_coding/acm2/acm_receiver.h
+index 19dc57758ee46e78e7d0c83b1234f45d91a250cb..805b4a9681bd47ed4b1987c787a18dc95629653d 100644
+--- a/modules/audio_coding/acm2/acm_receiver.h
++++ b/modules/audio_coding/acm2/acm_receiver.h
+@@ -45,6 +45,8 @@ class AcmReceiver {
+   // Destructor of the class.
+   ~AcmReceiver();
+ 
++  bool IsFec(int payload_type) const; //+by xxlang : gsfec
++
+   //
+   // Inserts a payload with its associated RTP-header into NetEq.
+   //
 diff --git a/modules/audio_coding/neteq/decoder_database.cc b/modules/audio_coding/neteq/decoder_database.cc
 index e755e7bb3ce298235c79a50a720fc928274c3e38..a916c786347f05d108069a29b292dd77776e058c 100644
 --- a/modules/audio_coding/neteq/decoder_database.cc
@@ -2575,7 +2616,7 @@ index e0a3fe35098bca1d0369122213e600466a0c362c..f67d591e27496315958b2507bcb29661
    // registered in the database. Otherwise, returns kDecoderNotFound.
    int CheckPayloadTypes(const PacketList& packet_list) const;
 diff --git a/modules/audio_coding/neteq/neteq_impl.cc b/modules/audio_coding/neteq/neteq_impl.cc
-index d156352a268da43b3d2b959819abcee41183c6de..c2ea5e9236bef498a4aae50f67a73255daff745f 100644
+index d156352a268da43b3d2b959819abcee41183c6de..9b631d8f329bec7b310e81c0618cee5dcf6f5f51 100644
 --- a/modules/audio_coding/neteq/neteq_impl.cc
 +++ b/modules/audio_coding/neteq/neteq_impl.cc
 @@ -44,6 +44,7 @@
@@ -2668,13 +2709,14 @@ index d156352a268da43b3d2b959819abcee41183c6de..c2ea5e9236bef498a4aae50f67a73255
  int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
                                      rtc::ArrayView<const uint8_t> payload) {
    if (payload.empty()) {
-@@ -674,7 +734,13 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
+@@ -674,7 +734,14 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
          return kDtmfInsertError;
        }
        it = packet_list.erase(it);
 +      //+by xxlang : gsfec {
 +    } else if (decoder_database_->IsGsfec(current_packet.payload_type)) {
 +      AddReceivedPacket(current_packet, true);
++      stats_->SecondaryPacketsReceived(1); // cover both red and fec
 +      it = packet_list.erase(it);
 +      //+by xxlang : gsfec }
      } else {
