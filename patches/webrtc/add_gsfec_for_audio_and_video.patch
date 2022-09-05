@@ -2383,7 +2383,7 @@ index 4bc61d540775ad5540fcd7d29ee65019b0b99ebb..24b08d75eef1fff9b099b776cb95538b
  };
  }  // namespace cricket
 diff --git a/modules/audio_coding/acm2/acm_receiver.cc b/modules/audio_coding/acm2/acm_receiver.cc
-index 0e615cae821b149bd3f995470cf6debfff846baa..afecaccb838566f9e94b5a3c8d1598e15772bf16 100644
+index 0e615cae821b149bd3f995470cf6debfff846baa..dccbfc2a7367977e9df4636ecd92a926c6c009a8 100644
 --- a/modules/audio_coding/acm2/acm_receiver.cc
 +++ b/modules/audio_coding/acm2/acm_receiver.cc
 @@ -20,6 +20,7 @@
@@ -2411,7 +2411,7 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..afecaccb838566f9e94b5a3c8d1598e1
  int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
                                rtc::ArrayView<const uint8_t> incoming_payload) {
    if (incoming_payload.empty()) {
-@@ -108,8 +119,81 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
+@@ -108,8 +119,82 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
    auto format = neteq_->GetDecoderFormat(payload_type);
    if (format && absl::EqualsIgnoreCase(format->sdp_format.name, "red")) {
      // This is a RED packet. Get the format of the audio codec.
@@ -2469,10 +2469,11 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..afecaccb838566f9e94b5a3c8d1598e1
 +      }
 +      // check valid block codec.
 +      if (new_header.payload_length > 0) {
-+        format = neteq_->GetDecoderFormat(new_header.payload_type);
++        payload_type = new_header.payload_type;
++        format = neteq_->GetDecoderFormat(payload_type);
 +        if (!format) {
 +          RTC_LOG_F(LS_ERROR)
-+              << "RED Block Payload-type " << static_cast<int>(new_header.payload_type) << " is not registered.";
++              << "RED Block Payload-type " << payload_type << " is not registered.";
 +          return -1;
 +        }
 +        if (absl::EqualsIgnoreCase(format->sdp_format.name, cricket::kGsfecCodecName)) {
@@ -2493,7 +2494,7 @@ index 0e615cae821b149bd3f995470cf6debfff846baa..afecaccb838566f9e94b5a3c8d1598e1
    }
    if (!format) {
      RTC_LOG_F(LS_ERROR) << "Payload-type " << payload_type
-@@ -125,7 +209,7 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
+@@ -125,7 +210,7 @@ int AcmReceiver::InsertPacket(const RTPHeader& rtp_header,
          // packets into NetEq.
          return 0;
        }
