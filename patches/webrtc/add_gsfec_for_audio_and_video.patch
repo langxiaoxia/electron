@@ -2617,7 +2617,7 @@ index e0a3fe35098bca1d0369122213e600466a0c362c..f67d591e27496315958b2507bcb29661
    // registered in the database. Otherwise, returns kDecoderNotFound.
    int CheckPayloadTypes(const PacketList& packet_list) const;
 diff --git a/modules/audio_coding/neteq/neteq_impl.cc b/modules/audio_coding/neteq/neteq_impl.cc
-index d156352a268da43b3d2b959819abcee41183c6de..9b631d8f329bec7b310e81c0618cee5dcf6f5f51 100644
+index d156352a268da43b3d2b959819abcee41183c6de..15db52ee69bb7e9a938527c38ec88894aee93984 100644
 --- a/modules/audio_coding/neteq/neteq_impl.cc
 +++ b/modules/audio_coding/neteq/neteq_impl.cc
 @@ -44,6 +44,7 @@
@@ -2655,7 +2655,7 @@ index d156352a268da43b3d2b959819abcee41183c6de..9b631d8f329bec7b310e81c0618cee5d
        red_payload_splitter_(std::move(deps.red_payload_splitter)),
        timestamp_scaler_(std::move(deps.timestamp_scaler)),
        vad_(new PostDecodeVad()),
-@@ -558,6 +570,54 @@ NetEq::Operation NetEqImpl::last_operation_for_test() const {
+@@ -558,8 +570,57 @@ NetEq::Operation NetEqImpl::last_operation_for_test() const {
  
  // Methods below this line are private.
  
@@ -2702,31 +2702,74 @@ index d156352a268da43b3d2b959819abcee41183c6de..9b631d8f329bec7b310e81c0618cee5d
 +        recovered_packet->pkt->data.data() + header.headerLength;
 +    size_t payload_length = packet_length - header.headerLength;
 +    rtc::ArrayView<const uint8_t> payload_data(payload, payload_length);
-+    InsertPacketInternal(header, payload_data);
++    InsertPacketInternal(header, payload_data, true);
 +  }
 +}
 +//+by xxlang : gsfec }
 +
  int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
-                                     rtc::ArrayView<const uint8_t> payload) {
+-                                    rtc::ArrayView<const uint8_t> payload) {
++                                    rtc::ArrayView<const uint8_t> payload,
++                                    bool recovered) {
    if (payload.empty()) {
-@@ -674,7 +734,14 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
+     RTC_LOG_F(LS_ERROR) << "payload is empty";
+     return kInvalidPointer;
+@@ -590,7 +651,8 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
+     timestamp_scaler_->Reset();
+   }
+ 
+-  if (!decoder_database_->IsRed(rtp_header.payloadType)) {
++  //+by xxlang : gsfec : Keep timestamp before decode fec.
++  if (!decoder_database_->IsRed(rtp_header.payloadType) && gsfec_decoder_ == nullptr) {
+     // Scale timestamp to internal domain (only for some codecs).
+     timestamp_scaler_->ToInternal(&packet_list);
+   }
+@@ -649,7 +711,8 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
+ 
+   // Update main_timestamp, if new packets appear in the list
+   // after RED splitting.
+-  if (decoder_database_->IsRed(rtp_header.payloadType)) {
++  //+by xxlang : gsfec : Keep timestamp before decode fec.
++  if (decoder_database_->IsRed(rtp_header.payloadType) && gsfec_decoder_ == nullptr) {
+     timestamp_scaler_->ToInternal(&packet_list);
+     main_timestamp = packet_list.front().timestamp;
+     main_payload_type = packet_list.front().payload_type;
+@@ -674,11 +737,33 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
          return kDtmfInsertError;
        }
        it = packet_list.erase(it);
-+      //+by xxlang : gsfec {
++    //+by xxlang : gsfec {
 +    } else if (decoder_database_->IsGsfec(current_packet.payload_type)) {
 +      AddReceivedPacket(current_packet, true);
 +      stats_->SecondaryPacketsReceived(1); // cover both red and fec
 +      it = packet_list.erase(it);
-+      //+by xxlang : gsfec }
++    } else if (gsfec_decoder_ != nullptr && !recovered) {
++      AddReceivedPacket(current_packet, false);
++      ++it;
++    //+by xxlang : gsfec }
      } else {
-+      AddReceivedPacket(current_packet, false);  //+by xxlang : gsfec
        ++it;
      }
    }
+ 
++  //+by xxlang : gsfec {
++  // Update timestamp after decode fec.
++  if (gsfec_decoder_ != nullptr) {
++    if (packet_list.empty()) {
++      return 0;
++    }
++    timestamp_scaler_->ToInternal(&packet_list);
++    main_timestamp = packet_list.front().timestamp;
++    main_payload_type = packet_list.front().payload_type;
++    main_sequence_number = packet_list.front().sequence_number;
++  }
++  //+by xxlang : gsfec }
++
+   PacketList parsed_packet_list;
+   bool is_dtx = false;
+   while (!packet_list.empty()) {
 diff --git a/modules/audio_coding/neteq/neteq_impl.h b/modules/audio_coding/neteq/neteq_impl.h
-index e130422a304a2e15bae23903763bc3c906a38881..ccc20f7ff6052f498ae2a10b62f2069de0a270f8 100644
+index e130422a304a2e15bae23903763bc3c906a38881..16819cfc092b9b06ab6ebc85e4c6aa374ffb40bc 100644
 --- a/modules/audio_coding/neteq/neteq_impl.h
 +++ b/modules/audio_coding/neteq/neteq_impl.h
 @@ -29,6 +29,7 @@
@@ -2745,7 +2788,7 @@ index e130422a304a2e15bae23903763bc3c906a38881..ccc20f7ff6052f498ae2a10b62f2069d
      std::unique_ptr<NetEqController> neteq_controller;
      std::unique_ptr<RedPayloadSplitter> red_payload_splitter;
      std::unique_ptr<TimestampScaler> timestamp_scaler;
-@@ -207,6 +209,10 @@ class NetEqImpl : public webrtc::NetEq {
+@@ -207,11 +209,16 @@ class NetEqImpl : public webrtc::NetEq {
    // calculating correlations of current frame against history.
    static const size_t kSyncBufferSize = kMaxFrameSize + 60 * 48;
  
@@ -2756,7 +2799,14 @@ index e130422a304a2e15bae23903763bc3c906a38881..ccc20f7ff6052f498ae2a10b62f2069d
    // Inserts a new packet into NetEq. This is used by the InsertPacket method
    // above. Returns 0 on success, otherwise an error code.
    // TODO(hlundin): Merge this with InsertPacket above?
-@@ -345,6 +351,12 @@ class NetEqImpl : public webrtc::NetEq {
+   int InsertPacketInternal(const RTPHeader& rtp_header,
+-                           rtc::ArrayView<const uint8_t> payload)
++                           rtc::ArrayView<const uint8_t> payload,
++                           bool recovered = false) //+by xxlang : gsfec
+       RTC_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+ 
+   // Delivers 10 ms of audio data. The data is written to |audio_frame|.
+@@ -345,6 +352,12 @@ class NetEqImpl : public webrtc::NetEq {
    const std::unique_ptr<DtmfToneGenerator> dtmf_tone_generator_
        RTC_GUARDED_BY(mutex_);
    const std::unique_ptr<PacketBuffer> packet_buffer_ RTC_GUARDED_BY(mutex_);
@@ -3497,10 +3547,10 @@ index 0000000000000000000000000000000000000000..3d8aeba84bff7df450ad9f8bba280aaa
 +#endif  // MODULES_RTP_RTCP_INCLUDE_GSFEC_SENDER_H_
 diff --git a/modules/rtp_rtcp/source/gs_forward_error_correction.cc b/modules/rtp_rtcp/source/gs_forward_error_correction.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..a9fa58d40fb0cc980c36db3ed473d3f7d8bc5b7f
+index 0000000000000000000000000000000000000000..29a7fb750e8a875ab9355392698f09615d7f23bf
 --- /dev/null
 +++ b/modules/rtp_rtcp/source/gs_forward_error_correction.cc
-@@ -0,0 +1,787 @@
+@@ -0,0 +1,788 @@
 +/*
 + *  Copyright (c) 2012 The WebRTC project authors. All Rights Reserved.
 + *
@@ -3893,6 +3943,7 @@ index 0000000000000000000000000000000000000000..a9fa58d40fb0cc980c36db3ed473d3f7
 +    RTC_DCHECK_EQ(recovered_packet->ssrc, received_packet.ssrc);
 +    if (recovered_packet->seq_num == received_packet.seq_num) {
 +      // Duplicate packet, no need to add to list.
++      RTC_LOG(LS_INFO) << GsfecLibToString() << ": Drop duplicate Media packet.";
 +      return;
 +    }
 +  }
@@ -3946,9 +3997,9 @@ index 0000000000000000000000000000000000000000..a9fa58d40fb0cc980c36db3ed473d3f7
 +  }
 +
 +  std::unique_ptr<ReceivedFecPacket> fec_packet(new ReceivedFecPacket());
-+  fec_packet->pkt = received_packet.pkt;
 +  fec_packet->ssrc = received_packet.ssrc;
 +  fec_packet->seq_num = received_packet.seq_num;
++  fec_packet->pkt = received_packet.pkt;
 +  // Parse GS-FEC header specific info.
 +  bool ret = fec_header_reader_->ReadFecHeader(fec_packet.get());
 +  if (!ret) {
