@@ -1106,7 +1106,7 @@ void NativeWindowViews::SetIgnoreMouseEvents(bool ignore, bool forward) {
 #endif
 }
 
-//+by xxlang@2022-06-27 {
+//+by xxlang : For Windows versions older than Windows Version 10 2004 (20H1). {
 #if defined(OS_WIN)
 struct WINCOMPATTRDATA {
   DWORD attribute;
@@ -1142,14 +1142,14 @@ bool SetExcludedFromDDA(HWND window, BOOL bFlag) {
   return true;
 }
 #endif
-//+by xxlang@2022-06-27 }
+//+by xxlang : For Windows versions older than Windows Version 10 2004 (20H1). }
 
 void NativeWindowViews::SetContentProtection(bool enable) {
 #if defined(OS_WIN)
   HWND hwnd = GetAcceleratedWidget();
   DWORD affinity = enable ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
   ::SetWindowDisplayAffinity(hwnd, affinity);
-  SetExcludedFromDDA(hwnd, TRUE);  //+by xxlang@2022-06-27
+  SetExcludedFromDDA(hwnd, enable ? TRUE : FALSE); //+by xxlang : For Windows versions older than Windows Version 10 2004 (20H1).
   if (!layered_) {
     // Workaround to prevent black window on screen capture after hiding and
     // showing the BrowserWindow.
