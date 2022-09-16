@@ -781,7 +781,7 @@ void ElectronBrowserClient::AppendExtraCommandLineSwitches(
         switches::kSecureSchemes,        switches::kBypassCSPSchemes,
         switches::kCORSSchemes,          switches::kFetchSchemes,
         switches::kServiceWorkerSchemes, switches::kEnableApiFilteringLogging,
-        switches::kStreamingSchemes};
+        switches::kStreamingSchemes,     ::switches::kDisableWebRtcEncryption};
     command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
                                    kCommonSwitchNames,
                                    base::size(kCommonSwitchNames));
