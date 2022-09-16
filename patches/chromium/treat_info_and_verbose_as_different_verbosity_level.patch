@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 16 Sep 2022 14:02:59 +0800
+Subject: treat_info_and_verbose_as_different_verbosity_level
+
+
+diff --git a/third_party/webrtc_overrides/rtc_base/logging.cc b/third_party/webrtc_overrides/rtc_base/logging.cc
+index 87ae618c49629dbb32b5d0fc00134c783ef73cb2..d63a5f7f5c4757e526858b5009168bb6fa1941d2 100644
+--- a/third_party/webrtc_overrides/rtc_base/logging.cc
++++ b/third_party/webrtc_overrides/rtc_base/logging.cc
+@@ -85,11 +85,12 @@ inline int WebRtcVerbosityLevel(LoggingSeverity sev) {
+       return -2;
+     case LS_WARNING:
+       return -1;
+-    case LS_INFO:  // We treat 'info' and 'verbose' as the same verbosity level.
+-    case LS_VERBOSE:
++    case LS_INFO:
+       return 1;
+-    case LS_SENSITIVE:
++    case LS_VERBOSE:
+       return 2;
++    case LS_SENSITIVE:
++      return 3;
+     default:
+       NOTREACHED();
+       return 0;
