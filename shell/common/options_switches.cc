@@ -24,6 +24,7 @@ const char kMaxHeight[] = "maxHeight";
 const char kResizable[] = "resizable";
 const char kMovable[] = "movable";
 const char kMinimizable[] = "minimizable";
+const char kOverrideMinimize[] = "overrideMinimize"; //+by xxlang@2022-09-23 : override minimize
 const char kMaximizable[] = "maximizable";
 const char kFullScreenable[] = "fullscreenable";
 const char kClosable[] = "closable";

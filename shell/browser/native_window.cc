@@ -520,6 +520,15 @@ void NativeWindow::NotifyWindowMinimize() {
     observer.OnWindowMinimize();
 }
 
+//+by xxlang@2022-09-23 : override minimize {
+#if defined(OS_MAC)
+void NativeWindow::NotifyWindowOverrideMinimize() {
+  for (NativeWindowObserver& observer : observers_)
+    observer.OnWindowOverrideMinimize();
+}
+#endif
+//+by xxlang@2022-09-23 : override minimize }
+
 void NativeWindow::NotifyWindowRestore() {
   for (NativeWindowObserver& observer : observers_)
     observer.OnWindowRestore();

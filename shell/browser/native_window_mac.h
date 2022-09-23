@@ -70,6 +70,10 @@ class NativeWindowMac : public NativeWindow,
   bool IsMovable() override;
   void SetMinimizable(bool minimizable) override;
   bool IsMinimizable() override;
+  //+by xxlang@2022-09-23 : override minimize {
+  void SetOverrideMinimize(bool override_minimize) override;
+  bool IsOverrideMinimize() override;
+  //+by xxlang@2022-09-23 : override minimize }
   void SetMaximizable(bool maximizable) override;
   bool IsMaximizable() override;
   void SetFullScreenable(bool fullscreenable) override;
@@ -264,6 +268,8 @@ class NativeWindowMac : public NativeWindow,
 
   // Controls the position and visibility of window buttons.
   base::scoped_nsobject<WindowButtonsProxy> buttons_proxy_;
+
+  bool override_minimize_ = false; //+by xxlang@2022-09-23 : override minimize
 
   // Maximizable window state; necessary for persistence through redraws.
   bool maximizable_ = true;

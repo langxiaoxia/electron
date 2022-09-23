@@ -202,6 +202,14 @@ void BaseWindow::OnWindowMinimize() {
   Emit("minimize");
 }
 
+//+by xxlang@2022-09-23 : override minimize {
+#if defined(OS_MAC)
+void BaseWindow::OnWindowOverrideMinimize() {
+  Emit("override-minimize");
+}
+#endif
+//+by xxlang@2022-09-23 : override minimize }
+
 void BaseWindow::OnWindowRestore() {
   Emit("restore");
 }

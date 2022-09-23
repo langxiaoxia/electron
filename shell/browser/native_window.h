@@ -121,6 +121,12 @@ class NativeWindow : public base::SupportsUserData,
   virtual bool IsMovable() = 0;
   virtual void SetMinimizable(bool minimizable) = 0;
   virtual bool IsMinimizable() = 0;
+  //+by xxlang@2022-09-23 : override minimize {
+#if defined(OS_MAC)
+  virtual void SetOverrideMinimize(bool minimizable) = 0;
+  virtual bool IsOverrideMinimize() = 0;
+#endif
+  //+by xxlang@2022-09-23 : override minimize }
   virtual void SetMaximizable(bool maximizable) = 0;
   virtual bool IsMaximizable() = 0;
   virtual void SetFullScreenable(bool fullscreenable) = 0;
@@ -277,6 +283,9 @@ class NativeWindow : public base::SupportsUserData,
   void NotifyWindowMaximize();
   void NotifyWindowUnmaximize();
   void NotifyWindowMinimize();
+#if defined(OS_MAC)
+  void NotifyWindowOverrideMinimize(); //+by xxlang@2022-09-23 : override minimize
+#endif
   void NotifyWindowRestore();
   void NotifyWindowMove();
   void NotifyWindowWillResize(const gfx::Rect& new_bounds,

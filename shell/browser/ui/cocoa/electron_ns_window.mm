@@ -252,4 +252,13 @@ bool ScopedDisableResize::disable_resize_ = false;
     [super performMiniaturize:sender];
 }
 
+//+by xxlang@2022-09-23 : override minimize {
+- (void)miniaturize:(id)sender {
+  if (shell_->IsOverrideMinimize())
+    shell_->NotifyWindowOverrideMinimize();
+  else
+    [super miniaturize:sender];
+}
+//+by xxlang@2022-09-23 : override minimize }
+
 @end

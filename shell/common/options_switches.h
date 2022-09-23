@@ -27,6 +27,7 @@ extern const char kMaxHeight[];
 extern const char kResizable[];
 extern const char kMovable[];
 extern const char kMinimizable[];
+extern const char kOverrideMinimize[]; //+by xxlang@2022-09-23 : override minimize
 extern const char kMaximizable[];
 extern const char kFullScreenable[];
 extern const char kClosable[];

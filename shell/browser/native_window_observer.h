@@ -69,6 +69,9 @@ class NativeWindowObserver : public base::CheckedObserver {
   virtual void OnWindowMaximize() {}
   virtual void OnWindowUnmaximize() {}
   virtual void OnWindowMinimize() {}
+#if defined(OS_MAC)
+  virtual void OnWindowOverrideMinimize() {} //+by xxlang@2022-09-23 : override minimize
+#endif
   virtual void OnWindowRestore() {}
   virtual void OnWindowWillResize(const gfx::Rect& new_bounds,
                                   bool* prevent_default) {}
