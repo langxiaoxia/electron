@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Sun, 9 Oct 2022 19:24:40 +0800
+Subject: fix_deps_buildtools_linux64
+
+
+diff --git a/DEPS b/DEPS
+index 3af237f0703d9c6511c0ca8bdd7601e217c9d5c6..d112f2dfe477caa147d37e71f9736339c93e6ac8 100644
+--- a/DEPS
++++ b/DEPS
+@@ -433,7 +433,7 @@ deps = {
+   'src/buildtools/linux64': {
+     'packages': [
+       {
+-        'package': 'gn/gn/linux-amd64',
++        'package': 'gn/gn/linux-${{arch}}',
+         'version': Var('gn_version'),
+       }
+     ],
