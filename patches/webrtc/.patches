@@ -31,3 +31,4 @@ optimize_sse2-_avx2_parts_of_the_matched_filter_further.patch
 optimize_the_filter_analyzer.patch
 optimize_matchedfilter.patch
 add_gsfec_for_audio_and_video.patch
+add_get_window_by_title.patch

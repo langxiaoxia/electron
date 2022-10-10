@@ -1,0 +1,218 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 10 Oct 2022 17:02:34 +0800
+Subject: add_get_window_by_title
+
+
+diff --git a/modules/desktop_capture/linux/window_finder_x11.cc b/modules/desktop_capture/linux/window_finder_x11.cc
+index 16fb3252ad8c79d201232b6a0d71cef137fa53b0..1aa369813055fcba81e0d9909ce6b04c4c11e817 100644
+--- a/modules/desktop_capture/linux/window_finder_x11.cc
++++ b/modules/desktop_capture/linux/window_finder_x11.cc
+@@ -39,6 +39,22 @@ WindowId WindowFinderX11::GetWindowUnderPoint(DesktopVector point) {
+   return id;
+ }
+ 
++//+by xxlang@2022-09-30 : share annotation {
++WindowId WindowFinderX11::GetWindowByTitle(const std::string& title) {
++  WindowId id = kNullWindowId;
++  GetWindowList(cache_, [&id, this, title](::Window window) {
++    std::string window_title;
++    if (GetWindowTitle(this->cache_->display(), window, &window_title) &&
++        title == window_title) {
++      id = window;
++      return false;
++    }
++    return true;
++  });
++  return id;
++}
++//+by xxlang@2022-09-30 : share annotation }
++
+ // static
+ std::unique_ptr<WindowFinder> WindowFinder::Create(
+     const WindowFinder::Options& options) {
+diff --git a/modules/desktop_capture/linux/window_finder_x11.h b/modules/desktop_capture/linux/window_finder_x11.h
+index d0bba8697b5f7544d4d6cccde6f12ce56a9ce488..c68d4e7e7aee3bfb91d71e76e15308809d1935af 100644
+--- a/modules/desktop_capture/linux/window_finder_x11.h
++++ b/modules/desktop_capture/linux/window_finder_x11.h
+@@ -25,6 +25,7 @@ class WindowFinderX11 final : public WindowFinder {
+ 
+   // WindowFinder implementation.
+   WindowId GetWindowUnderPoint(DesktopVector point) override;
++  WindowId GetWindowByTitle(const std::string& title) override; //+by xxlang@2022-09-30 : share annotation
+ 
+  private:
+   XAtomCache* const cache_;
+diff --git a/modules/desktop_capture/linux/window_list_utils.cc b/modules/desktop_capture/linux/window_list_utils.cc
+index 12b41d379e1dc0ee15aee367a0077304427abac1..a7024d42c2e473f5506d67af7e68ef8f0994d751 100644
+--- a/modules/desktop_capture/linux/window_list_utils.cc
++++ b/modules/desktop_capture/linux/window_list_utils.cc
+@@ -233,4 +233,35 @@ void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect) {
+ }
+ //+by xxlang@2022-01-15 }
+ 
++//+by xxlang@2022-09-30 {
++bool GetWindowTitle(::Display* display, ::Window window, std::string* title) {
++  int status;
++  bool result = false;
++  XTextProperty window_name;
++  window_name.value = nullptr;
++  if (window) {
++    status = XGetWMName(display, window, &window_name);
++    if (status && window_name.value && window_name.nitems) {
++      int cnt;
++      char** list = nullptr;
++      status =
++          Xutf8TextPropertyToTextList(display, &window_name, &list, &cnt);
++      if (status >= Success && cnt && *list) {
++        if (cnt > 1) {
++          RTC_LOG(LS_INFO) << "Window has " << cnt
++                           << " text properties, only using the first one.";
++        }
++        *title = *list;
++        result = true;
++      }
++      if (list)
++        XFreeStringList(list);
++    }
++    if (window_name.value)
++      XFree(window_name.value);
++  }
++  return result;
++}
++//+by xxlang@2022-09-30 }
++
+ }  // namespace webrtc
+diff --git a/modules/desktop_capture/linux/window_list_utils.h b/modules/desktop_capture/linux/window_list_utils.h
+index 6e50c0b6a7545f21446187037ffcef3d56335dbd..07d76394973c7eee1ccd13a88bba81b7e665b6e9 100644
+--- a/modules/desktop_capture/linux/window_list_utils.h
++++ b/modules/desktop_capture/linux/window_list_utils.h
+@@ -46,6 +46,8 @@ bool GetWindowRect(::Display* display,
+ 
+ void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect); //+by xxlang@2022-01-15
+ 
++bool GetWindowTitle(::Display* display, ::Window window, std::string* title); //+by xxlang@2022-09-30
++
+ // Creates a DesktopRect from |attributes|.
+ template <typename T>
+ DesktopRect DesktopRectFromXAttributes(const T& attributes) {
+diff --git a/modules/desktop_capture/window_finder.h b/modules/desktop_capture/window_finder.h
+index 0d346640a21e18fe76d16633aaf2f0b5a035cdf9..96b3adb51392b6739766db88f49e39a27e97d294 100644
+--- a/modules/desktop_capture/window_finder.h
++++ b/modules/desktop_capture/window_finder.h
+@@ -40,6 +40,8 @@ class WindowFinder {
+   // starts from (0, 0).
+   virtual WindowId GetWindowUnderPoint(DesktopVector point) = 0;
+ 
++  virtual WindowId GetWindowByTitle(const std::string& title) = 0; //+by xxlang@2022-09-30 : share annotation
++
+   struct Options final {
+     Options();
+     ~Options();
+diff --git a/modules/desktop_capture/window_finder_mac.h b/modules/desktop_capture/window_finder_mac.h
+index 988dd497dd23a8bedb1bad11c9fb5ebbeca4ae7e..9909a708f2162081eb89f473cc3d067ba82053d1 100644
+--- a/modules/desktop_capture/window_finder_mac.h
++++ b/modules/desktop_capture/window_finder_mac.h
+@@ -27,6 +27,7 @@ class WindowFinderMac final : public WindowFinder {
+ 
+   // WindowFinder implementation.
+   WindowId GetWindowUnderPoint(DesktopVector point) override;
++  WindowId GetWindowByTitle(const std::string& title) override; //+by xxlang@2022-09-30 : share annotation
+ 
+  private:
+   const rtc::scoped_refptr<DesktopConfigurationMonitor> configuration_monitor_;
+diff --git a/modules/desktop_capture/window_finder_mac.mm b/modules/desktop_capture/window_finder_mac.mm
+index e1d0316c798d674cbc57582517811a6e4f8d6eec..9b11703717decbf46bd6d10585d667681c39dcd8 100644
+--- a/modules/desktop_capture/window_finder_mac.mm
++++ b/modules/desktop_capture/window_finder_mac.mm
+@@ -43,6 +43,24 @@
+   return id;
+ }
+ 
++//+by xxlang@2022-09-30 : share annotation {
++WindowId WindowFinderMac::GetWindowByTitle(const std::string& title) {
++  WindowId id = kNullWindowId;
++  GetWindowList(
++      [&id, title](CFDictionaryRef window) {
++        const std::string window_title = GetWindowTitle(window);
++        if (title == window_title) {
++          id = GetWindowId(window);
++          return false;
++        }
++        return true;
++      },
++      true,
++      false);
++  return id;
++}
++//+by xxlang@2022-09-30 : share annotation }
++
+ // static
+ std::unique_ptr<WindowFinder> WindowFinder::Create(
+     const WindowFinder::Options& options) {
+diff --git a/modules/desktop_capture/window_finder_win.cc b/modules/desktop_capture/window_finder_win.cc
+index a8c3d39e1997f71049ce3ad700b7062de342126e..9525eb5562acf9fdb73052c375f6426694a0a936 100644
+--- a/modules/desktop_capture/window_finder_win.cc
++++ b/modules/desktop_capture/window_finder_win.cc
+@@ -8,11 +8,13 @@
+  *  be found in the AUTHORS file in the root of the source tree.
+  */
+ 
++#include "base/strings/utf_string_conversions.h"
+ #include "modules/desktop_capture/window_finder_win.h"
+ 
+ #include <windows.h>
+ 
+ #include <memory>
++#include <string>
+ 
+ namespace webrtc {
+ 
+@@ -37,6 +39,35 @@ WindowId WindowFinderWin::GetWindowUnderPoint(DesktopVector point) {
+   return reinterpret_cast<WindowId>(window);
+ }
+ 
++//+by xxlang@2022-09-30 : share annotation {
++struct HwndWithTitle {
++  HwndWithTitle(const std::wstring title) : title_(title), hwnd_(nullptr) {}
++  const std::wstring title_;
++  HWND hwnd_;
++};
++
++BOOL CALLBACK EnumWindowsProcTitle(HWND hwnd, LPARAM lparam) {
++  const size_t kMaxTitleLength = 256;
++  wchar_t window_title[kMaxTitleLength];
++  ::GetWindowTextW(hwnd, window_title, kMaxTitleLength);
++  HwndWithTitle* hwnd_with_title = (HwndWithTitle*)lparam;
++  if (::wcscmp(window_title, hwnd_with_title->title_.c_str()) == 0) {
++    hwnd_with_title->hwnd_ = hwnd;
++    return FALSE;
++  }
++  return TRUE;
++}
++
++WindowId WindowFinderWin::GetWindowByTitle(const std::string& title) {
++  HwndWithTitle hwnd_with_title(base::UTF8ToWide(title));
++  ::EnumWindows(EnumWindowsProcTitle, reinterpret_cast<LPARAM>(&hwnd_with_title));
++  if (!hwnd_with_title.hwnd_) {
++    return kNullWindowId;
++  }
++  return reinterpret_cast<WindowId>(hwnd_with_title.hwnd_);
++}
++//+by xxlang@2022-09-30 : share annotation }
++
+ // static
+ std::unique_ptr<WindowFinder> WindowFinder::Create(
+     const WindowFinder::Options& options) {
+diff --git a/modules/desktop_capture/window_finder_win.h b/modules/desktop_capture/window_finder_win.h
+index a04e7e1aaeed849b70a91862c54a943255b66f3d..93f57b8a535d0736e8c77b2954db639cb549eb37 100644
+--- a/modules/desktop_capture/window_finder_win.h
++++ b/modules/desktop_capture/window_finder_win.h
+@@ -23,6 +23,7 @@ class WindowFinderWin final : public WindowFinder {
+ 
+   // WindowFinder implementation.
+   WindowId GetWindowUnderPoint(DesktopVector point) override;
++  WindowId GetWindowByTitle(const std::string& title) override; //+by xxlang@2022-09-30 : share annotation
+ };
+ 
+ }  // namespace webrtc
