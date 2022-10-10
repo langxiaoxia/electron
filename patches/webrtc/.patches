@@ -32,3 +32,4 @@ optimize_the_filter_analyzer.patch
 optimize_matchedfilter.patch
 add_gsfec_for_audio_and_video.patch
 add_get_window_by_title.patch
+add_share_mask.patch

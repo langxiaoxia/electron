@@ -1,0 +1,160 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 10 Oct 2022 18:55:21 +0800
+Subject: add_share_mask
+
+
+diff --git a/modules/desktop_capture/desktop_frame.cc b/modules/desktop_capture/desktop_frame.cc
+index 9e4a899fd26960b553b81beeb265f06e2d3f18f7..793a54dd153ef2e231e24ddbe5485bf570c6ea78 100644
+--- a/modules/desktop_capture/desktop_frame.cc
++++ b/modules/desktop_capture/desktop_frame.cc
+@@ -41,24 +41,31 @@ DesktopFrame::~DesktopFrame() = default;
+ 
+ void DesktopFrame::CopyPixelsFrom(const uint8_t* src_buffer,
+                                   int src_stride,
+-                                  const DesktopRect& dest_rect) {
++                                  const DesktopRect& dest_rect,
++                                  bool with_alpha) {
+   RTC_CHECK(DesktopRect::MakeSize(size()).ContainsRect(dest_rect));
+ 
+   uint8_t* dest = GetFrameDataAtPos(dest_rect.top_left());
+-  libyuv::CopyPlane(src_buffer, src_stride, dest, stride(),
+-                    DesktopFrame::kBytesPerPixel * dest_rect.width(),
+-                    dest_rect.height());
++  if (with_alpha) //+by xxlang@2022-09-30 : share annotation
++    libyuv::CopyPlaneWithAlpha(src_buffer, src_stride, dest, stride(),
++                      DesktopFrame::kBytesPerPixel * dest_rect.width(),
++                      dest_rect.height());
++  else
++    libyuv::CopyPlane(src_buffer, src_stride, dest, stride(),
++                      DesktopFrame::kBytesPerPixel * dest_rect.width(),
++                      dest_rect.height());
+ }
+ 
+ void DesktopFrame::CopyPixelsFrom(const DesktopFrame& src_frame,
+                                   const DesktopVector& src_pos,
+-                                  const DesktopRect& dest_rect) {
++                                  const DesktopRect& dest_rect,
++                                  bool with_alpha) {
+   RTC_CHECK(DesktopRect::MakeSize(src_frame.size())
+                 .ContainsRect(
+                     DesktopRect::MakeOriginSize(src_pos, dest_rect.size())));
+ 
+   CopyPixelsFrom(src_frame.GetFrameDataAtPos(src_pos), src_frame.stride(),
+-                 dest_rect);
++                 dest_rect, with_alpha); //+by xxlang@2022-09-30 : share annotation
+ }
+ 
+ bool DesktopFrame::CopyIntersectingPixelsFrom(const DesktopFrame& src_frame,
+@@ -98,7 +105,7 @@ bool DesktopFrame::CopyIntersectingPixelsFrom(const DesktopFrame& src_frame,
+   int32_t src_pos_y = std::max(0, -src_frame_offset.y());
+ 
+   CopyPixelsFrom(src_frame, DesktopVector(src_pos_x, src_pos_y),
+-                 intersection_rect);
++                 intersection_rect, true); //+by xxlang@2022-09-30 : share annotation
+   return true;
+ }
+ 
+diff --git a/modules/desktop_capture/desktop_frame.h b/modules/desktop_capture/desktop_frame.h
+index 4ee3680670c79ca97ca65437b756ad06d9078c51..6602d5b7f8bf4da478bade6f11d7c67ac00d68e2 100644
+--- a/modules/desktop_capture/desktop_frame.h
++++ b/modules/desktop_capture/desktop_frame.h
+@@ -80,10 +80,12 @@ class RTC_EXPORT DesktopFrame {
+   // within bounds of this frame.
+   void CopyPixelsFrom(const uint8_t* src_buffer,
+                       int src_stride,
+-                      const DesktopRect& dest_rect);
++                      const DesktopRect& dest_rect,
++                      bool with_alpha = false); //+by xxlang@2022-09-30 : share annotation
+   void CopyPixelsFrom(const DesktopFrame& src_frame,
+                       const DesktopVector& src_pos,
+-                      const DesktopRect& dest_rect);
++                      const DesktopRect& dest_rect,
++                      bool with_alpha = false); //+by xxlang@2022-09-30 : share annotation
+ 
+   // Copies pixels from another frame, with the copied & overwritten regions
+   // representing the intersection between the two frames. Returns true if
+diff --git a/modules/desktop_capture/mac/desktop_frame_cgimage.h b/modules/desktop_capture/mac/desktop_frame_cgimage.h
+index 8e006665730e1114ea57dc298f18824f3036abc2..bce046fc2b8bdff07e96ef54e3af00d4bfb0cd05 100644
+--- a/modules/desktop_capture/mac/desktop_frame_cgimage.h
++++ b/modules/desktop_capture/mac/desktop_frame_cgimage.h
+@@ -33,6 +33,9 @@ class DesktopFrameCGImage final : public DesktopFrame {
+   static std::unique_ptr<DesktopFrameCGImage> CreateForWindow(
+       CGWindowID window_id);
+ 
++  static std::unique_ptr<DesktopFrameCGImage> CreateForWindowWithMask(
++      CGWindowID window_id, CGWindowID mask_id); //+by xxlang@2022-09-30 : share annotation
++
+   ~DesktopFrameCGImage() override;
+ 
+  private:
+diff --git a/modules/desktop_capture/mac/desktop_frame_cgimage.mm b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
+index fb13fe273880727dd102710dd626a772c4183c51..c88f383a90a24e49f0423a01ad4253589791db8d 100644
+--- a/modules/desktop_capture/mac/desktop_frame_cgimage.mm
++++ b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
+@@ -41,6 +41,30 @@
+   return DesktopFrameCGImage::CreateFromCGImage(cg_image);
+ }
+ 
++//+by xxlang@2022-09-30 : share annotation {
++// static
++std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForWindowWithMask(CGWindowID window_id, CGWindowID mask_id) {
++  if (window_id == kCGNullWindowID || mask_id == kCGNullWindowID) {
++    return CreateForWindow(window_id);
++  }
++
++  CFMutableArrayRef windowArray = CFArrayCreateMutable(nullptr, 2, nullptr);
++  // Put mask before window.
++  CFArrayAppendValue(windowArray, reinterpret_cast<void*>(mask_id));
++  CFArrayAppendValue(windowArray, reinterpret_cast<void*>(window_id));
++  rtc::ScopedCFTypeRef<CGImageRef> cg_image(
++      CGWindowListCreateImageFromArray(CGRectNull,
++                              windowArray,
++                              kCGWindowImageDefault));
++  CFRelease(windowArray);
++  if (!cg_image) {
++    return nullptr;
++  }
++
++  return DesktopFrameCGImage::CreateFromCGImage(cg_image);
++}
++//+by xxlang@2022-09-30 : share annotation }
++
+ // static
+ std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateFromCGImage(
+     rtc::ScopedCFTypeRef<CGImageRef> cg_image) {
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index 7f1c4ac6e8347d0fbf197c02a69a8a64b6beb73b..7fdac908b394e6607104b8ebcb0e30af07a41891 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -396,6 +396,13 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+     if (context.IsSelectedWindowValid()) {
+       EnumWindows(OwnedWindowCollector, reinterpret_cast<LPARAM>(&context));
+ 
++      //+by xxlang@2022-09-30 : share annotation {
++      HWND hwnd_mask = reinterpret_cast<HWND>(window_finder_.GetWindowByTitle("Wave-Picture"));
++      if (hwnd_mask) {
++        owned_windows_.push_back(hwnd_mask);
++      }
++      //+by xxlang@2022-09-30 : share annotation }
++
+       if (!owned_windows_.empty()) {
+         if (!owned_window_capturer_) {
+           owned_window_capturer_ = std::make_unique<WindowCapturerWinGdi>();
+diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
+index 8da40ab970b719d9cec8921cea4363b806598a59..72c8decac34997635237beb7d3098eec692dbbd1 100644
+--- a/modules/desktop_capture/window_capturer_mac.mm
++++ b/modules/desktop_capture/window_capturer_mac.mm
+@@ -221,7 +221,11 @@ explicit WindowCapturerMac(
+     last_window_id_ = on_screen_window;
+   }
+ 
+-  std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindow(on_screen_window);
++  //+by xxlang@2022-09-30 : share annotation {
++  WindowId mask_id = window_finder_.GetWindowByTitle("Wave-Picture");
++  std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindowWithMask(on_screen_window, mask_id);
++  //+by xxlang@2022-09-30 : share annotation }
++
+   //+by xxlang@2022-03-28 : {
+   // On macOS Mojave we receive a 1x1 frame when the shared window is off screen.
+   // On macOS Catalina and Big Sur we receive null frame when the shared window is off screen.
