@@ -5,7 +5,7 @@ Subject: add_get_window_by_title
 
 
 diff --git a/modules/desktop_capture/linux/window_finder_x11.cc b/modules/desktop_capture/linux/window_finder_x11.cc
-index 16fb3252ad8c79d201232b6a0d71cef137fa53b0..1aa369813055fcba81e0d9909ce6b04c4c11e817 100644
+index 16fb3252ad8c79d201232b6a0d71cef137fa53b0..b21658ae0c812a58054ff20947f402a438c48aee 100644
 --- a/modules/desktop_capture/linux/window_finder_x11.cc
 +++ b/modules/desktop_capture/linux/window_finder_x11.cc
 @@ -39,6 +39,22 @@ WindowId WindowFinderX11::GetWindowUnderPoint(DesktopVector point) {
@@ -23,7 +23,7 @@ index 16fb3252ad8c79d201232b6a0d71cef137fa53b0..1aa369813055fcba81e0d9909ce6b04c
 +      return false;
 +    }
 +    return true;
-+  });
++  }, false);
 +  return id;
 +}
 +//+by xxlang@2022-09-30 : share annotation }
@@ -44,10 +44,29 @@ index d0bba8697b5f7544d4d6cccde6f12ce56a9ce488..c68d4e7e7aee3bfb91d71e76e1530880
   private:
    XAtomCache* const cache_;
 diff --git a/modules/desktop_capture/linux/window_list_utils.cc b/modules/desktop_capture/linux/window_list_utils.cc
-index 12b41d379e1dc0ee15aee367a0077304427abac1..a7024d42c2e473f5506d67af7e68ef8f0994d751 100644
+index 12b41d379e1dc0ee15aee367a0077304427abac1..c98ec5564a83623dcbd1e5dcf9aea5ac4c49a813 100644
 --- a/modules/desktop_capture/linux/window_list_utils.cc
 +++ b/modules/desktop_capture/linux/window_list_utils.cc
-@@ -233,4 +233,35 @@ void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect) {
+@@ -122,7 +122,8 @@ int32_t GetWindowState(XAtomCache* cache, ::Window window) {
+ }
+ 
+ bool GetWindowList(XAtomCache* cache,
+-                   rtc::FunctionView<bool(::Window)> on_window) {
++                   rtc::FunctionView<bool(::Window)> on_window,
++                   bool ignore_desktop) {
+   RTC_DCHECK(cache);
+   RTC_DCHECK(on_window);
+   ::Display* const display = cache->display();
+@@ -152,7 +153,7 @@ bool GetWindowList(XAtomCache* cache,
+       // Iterates in reverse order to return windows from front to back.
+       ::Window app_window =
+           GetApplicationWindow(cache, children[num_children - 1 - i]);
+-      if (app_window && !IsDesktopElement(cache, app_window)) {
++      if (app_window && (!ignore_desktop || !IsDesktopElement(cache, app_window))) {
+         if (!on_window(app_window)) {
+           return true;
+         }
+@@ -233,4 +234,35 @@ void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect) {
  }
  //+by xxlang@2022-01-15 }
  
@@ -84,10 +103,20 @@ index 12b41d379e1dc0ee15aee367a0077304427abac1..a7024d42c2e473f5506d67af7e68ef8f
 +
  }  // namespace webrtc
 diff --git a/modules/desktop_capture/linux/window_list_utils.h b/modules/desktop_capture/linux/window_list_utils.h
-index 6e50c0b6a7545f21446187037ffcef3d56335dbd..07d76394973c7eee1ccd13a88bba81b7e665b6e9 100644
+index 6e50c0b6a7545f21446187037ffcef3d56335dbd..c5557fd3818572f60a72f98d6101c471c8853923 100644
 --- a/modules/desktop_capture/linux/window_list_utils.h
 +++ b/modules/desktop_capture/linux/window_list_utils.h
-@@ -46,6 +46,8 @@ bool GetWindowRect(::Display* display,
+@@ -29,7 +29,8 @@ namespace webrtc {
+ // function returns false only when native APIs failed on all screens. Menus,
+ // panels and minimized windows will be ignored.
+ bool GetWindowList(XAtomCache* cache,
+-                   rtc::FunctionView<bool(::Window)> on_window);
++                   rtc::FunctionView<bool(::Window)> on_window,
++                   bool ignore_desktop = true);
+ 
+ // Returns WM_STATE property of the |window|. This function returns
+ // WithdrawnState if the |window| is missing.
+@@ -46,6 +47,8 @@ bool GetWindowRect(::Display* display,
  
  void GetFrameExtents(::Display* display, ::Window window, DesktopRect* rect); //+by xxlang@2022-01-15
  
