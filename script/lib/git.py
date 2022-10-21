@@ -48,7 +48,7 @@ def get_repo_root(path):
 
 def am(repo, patch_data, threeway=False, directory=None, exclude=None,
     committer_name=None, committer_email=None):
-  args = []
+  args = ['--whitespace=fix']
   if threeway:
     args += ['--3way']
   if directory is not None:
