@@ -50,7 +50,7 @@ index f5e3912061cd3848b37d53bfaab8aa75545bf114..4762db6492be58a7d2b03596f8ee37e6
          }
        }
 diff --git a/modules/desktop_capture/win/window_capture_utils.cc b/modules/desktop_capture/win/window_capture_utils.cc
-index ff95cb349476e79f38ee5eb97ce0a3083971335a..cc93ab63a25df3b24b6aba9574cd2110a880d72c 100644
+index ff95cb349476e79f38ee5eb97ce0a3083971335a..e41549ec43a4519b3f7777bdad3620d2611f1a55 100644
 --- a/modules/desktop_capture/win/window_capture_utils.cc
 +++ b/modules/desktop_capture/win/window_capture_utils.cc
 @@ -378,6 +378,82 @@ bool WindowCaptureHelperWin::IsWindowChromeNotification(HWND hwnd) {
@@ -101,7 +101,7 @@ index ff95cb349476e79f38ee5eb97ce0a3083971335a..cc93ab63a25df3b24b6aba9574cd2110
 +  char ansi_empty[] = "{empty}";
 +  char* ansi_window_title = ansi_empty;
 +  char* ansi_class_name = ansi_empty;
-+  
++
 +  const LONG exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 +
 +  const size_t kTitleLength = 256;

@@ -6,7 +6,6 @@ fix_ppt_full_screen_handler.patch
 add_window_border_on_linux.patch
 fix_window_border_on_linux.patch
 pause_iconic_for_window_capturer.patch
-fix_rnnoise_ns_bug_215242.patch
 fix_share_dingtalk_wps_black.patch
 stop_capture_hide_window_on_win.patch
 fix_pause_capture_on_mac_mojave.patch

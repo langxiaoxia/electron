@@ -227,7 +227,7 @@ index c55968b55fe18f7515f4c08e87a9ff665d6bca74..c5c5e4daa95f606678e781e04bf85909
      bool jitter_buffer_fast_playout,
      int jitter_buffer_min_delay_ms,
 diff --git a/audio/channel_send.cc b/audio/channel_send.cc
-index 0434e484cb406676428d25fc66eede7b4250ab9e..f34355791a47636a8011b9711a820aa18307dd2c 100644
+index 0434e484cb406676428d25fc66eede7b4250ab9e..c785ab6afbf08c893c4dbce838df3417982aa2e5 100644
 --- a/audio/channel_send.cc
 +++ b/audio/channel_send.cc
 @@ -78,6 +78,9 @@ class ChannelSend : public ChannelSendInterface,
@@ -346,7 +346,7 @@ index 0434e484cb406676428d25fc66eede7b4250ab9e..f34355791a47636a8011b9711a820aa1
  void ChannelSend::SetFrameEncryptor(
      rtc::scoped_refptr<FrameEncryptorInterface> frame_encryptor) {
    RTC_DCHECK_RUN_ON(&worker_thread_checker_);
-@@ -939,12 +990,17 @@ std::unique_ptr<ChannelSendInterface> CreateChannelSend(
+@@ -939,12 +990,16 @@ std::unique_ptr<ChannelSendInterface> CreateChannelSend(
      bool extmap_allow_mixed,
      int rtcp_report_interval_ms,
      uint32_t ssrc,
@@ -357,9 +357,7 @@ index 0434e484cb406676428d25fc66eede7b4250ab9e..f34355791a47636a8011b9711a820aa1
      TransportFeedbackObserver* feedback_observer) {
    return std::make_unique<ChannelSend>(
        clock, task_queue_factory, module_process_thread, rtp_transport,
--      rtcp_rtt_stats, rtc_event_log, frame_encryptor, crypto_options,
-+      rtcp_rtt_stats, rtc_event_log, 
-+      frame_encryptor, crypto_options,
+       rtcp_rtt_stats, rtc_event_log, frame_encryptor, crypto_options,
        extmap_allow_mixed, rtcp_report_interval_ms, ssrc,
 +      gsfec_ssrc, mid, extensions, //+by xxlang : gsfec
        std::move(frame_transformer), feedback_observer);
@@ -4457,7 +4455,7 @@ index 0000000000000000000000000000000000000000..893eeaf544306d954d2c932f5cbd15c1
 +}  // namespace webrtc
 diff --git a/modules/rtp_rtcp/source/gs_forward_error_correction.h b/modules/rtp_rtcp/source/gs_forward_error_correction.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..d6e3eac83d6ce103f1cdeac732f7d65b9580a220
+index 0000000000000000000000000000000000000000..a6e8fc52cd67fe937992d251656b4ea4ee259619
 --- /dev/null
 +++ b/modules/rtp_rtcp/source/gs_forward_error_correction.h
 @@ -0,0 +1,324 @@
@@ -4599,7 +4597,7 @@ index 0000000000000000000000000000000000000000..d6e3eac83d6ce103f1cdeac732f7d65b
 +    rtc::scoped_refptr<GsForwardErrorCorrection::Packet> pkt;
 +  };
 +  using ReceivedFecPacketList = std::list<std::unique_ptr<ReceivedFecPacket>>;
-+  
++
 +  class ReceivedFecGroup {
 +   public:
 +    ReceivedFecGroup();
@@ -4787,7 +4785,7 @@ index 0000000000000000000000000000000000000000..d6e3eac83d6ce103f1cdeac732f7d65b
 +#endif  // MODULES_RTP_RTCP_SOURCE_GS_FORWARD_ERROR_CORRECTION_H_
 diff --git a/modules/rtp_rtcp/source/gsfec_header_reader_writer.cc b/modules/rtp_rtcp/source/gsfec_header_reader_writer.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..a5f1faa94a50a4f84e1a61aa786cbc4e949a4261
+index 0000000000000000000000000000000000000000..486280e82318b3bf3adeabe5c5e79570958718a1
 --- /dev/null
 +++ b/modules/rtp_rtcp/source/gsfec_header_reader_writer.cc
 @@ -0,0 +1,163 @@
@@ -4908,15 +4906,15 @@ index 0000000000000000000000000000000000000000..a5f1faa94a50a4f84e1a61aa786cbc4e
 +  // k <= esi <= n - 1
 +  // n = k + n_r
 +  size_t maxFecLength = IP_PACKET_SIZE - kRtpHeaderSize - fecHeaderSize;
-+	if (k == 0 || n_r == 0 || esi < k || esi >= (k + n_r) || max_len > maxFecLength) {
-+		RTC_LOG(LS_WARNING) << "Discarding GS-FEC packet with malformed header: ver=" << static_cast<int>(ver)
++  if (k == 0 || n_r == 0 || esi < k || esi >= (k + n_r) || max_len > maxFecLength) {
++    RTC_LOG(LS_WARNING) << "Discarding GS-FEC packet with malformed header: ver=" << static_cast<int>(ver)
 +        << ", esi=" << static_cast<int>(esi)
 +        << ", sn_base=" << seq_num_base
 +        << ", k=" << static_cast<int>(k)
 +        << ", n_r=" << static_cast<int>(n_r)
 +        << ", max_len=" << max_len;
-+		return false;
-+	}
++    return false;
++  }
 +
 +  fec_packet->fec_header_size = fecHeaderSize;
 +  fec_packet->ver = ver;
@@ -31124,10 +31122,10 @@ HcmV?d00001
 
 diff --git a/modules/third_party/gsfec/test_rsfec.c b/modules/third_party/gsfec/test_rsfec.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..64bb95590cb6ba2e20accca17318ac07e78fcc36
+index 0000000000000000000000000000000000000000..61e29584a337ce18b52ed984a0981b713e7f63a6
 --- /dev/null
 +++ b/modules/third_party/gsfec/test_rsfec.c
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,317 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <time.h>
@@ -31445,7 +31443,6 @@ index 0000000000000000000000000000000000000000..64bb95590cb6ba2e20accca17318ac07
 +    freeAll();
 +    return 0;
 +}
-+
 diff --git a/modules/third_party/gsfec/win/x64/librsfec.dll b/modules/third_party/gsfec/win/x64/librsfec.dll
 new file mode 100644
 index 0000000000000000000000000000000000000000..1166d8a2e6b9581f401339ea79de2d4b63c286af

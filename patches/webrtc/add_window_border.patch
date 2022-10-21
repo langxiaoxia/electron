@@ -1186,7 +1186,7 @@ index 0000000000000000000000000000000000000000..8007793e20c44424d76becc2fa2e3647
 +#endif  // MODULES_DESKTOP_CAPTURE_WINDOW_BORDER_H_
 diff --git a/modules/desktop_capture/window_border_mac.mm b/modules/desktop_capture/window_border_mac.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..865cad79e2cbe91f7278fb2290f188134ac16106
+index 0000000000000000000000000000000000000000..3638514fe3d344a7feeb117ef943a5cead35cb67
 --- /dev/null
 +++ b/modules/desktop_capture/window_border_mac.mm
 @@ -0,0 +1,343 @@
@@ -1207,7 +1207,7 @@ index 0000000000000000000000000000000000000000..865cad79e2cbe91f7278fb2290f18813
 +
 +
 +@interface BorderView : NSView {
-+  
++
 +}
 +
 +- (id)initWithFrame:(NSRect)frameRect;
@@ -1444,7 +1444,7 @@ index 0000000000000000000000000000000000000000..865cad79e2cbe91f7278fb2290f18813
 +      RTC_LOG(LS_WARNING) << "Timer Event Handler(" << pThis << "): source window is invalid";
 +      return;
 +    }
-+    
++
 +    if (nil == border_window_) {
 +      RTC_LOG(LS_WARNING) << "Timer Event Handler(" << pThis << "): border window is invalid";
 +      return;
@@ -1475,7 +1475,7 @@ index 0000000000000000000000000000000000000000..865cad79e2cbe91f7278fb2290f18813
 +    if (border_order_old != border_order_new) {
 +//      RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): border order " << border_order_old << " => " << border_order_new;
 +    }
-+    
++
 +    NSRect border_nsrect =  [border_window_ frame];
 +    DesktopRect source_rect = GetWindowBounds(source_id_);
 +    gfx::Rect source_gfxrect(source_rect.left(), source_rect.top(), source_rect.width(), source_rect.height());
@@ -1535,7 +1535,7 @@ index 0000000000000000000000000000000000000000..865cad79e2cbe91f7278fb2290f18813
 +}  // namespace webrtc
 diff --git a/modules/desktop_capture/window_border_win.cc b/modules/desktop_capture/window_border_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa396222d4
+index 0000000000000000000000000000000000000000..291fd9739f3d9ac0122887da01eb0b77f91af852
 --- /dev/null
 +++ b/modules/desktop_capture/window_border_win.cc
 @@ -0,0 +1,608 @@
@@ -1619,8 +1619,8 @@ index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa
 +  POINT ptSrc = {0, 0};
 +
 +#ifdef USE_GDIPLUS
-+//  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi+) border_hwnd=" << border_hwnd << " window_rect=(" 
-+//    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")" 
++//  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi+) border_hwnd=" << border_hwnd << " window_rect=("
++//    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")"
 +//    << ", " << window_rect.width() << "x" << window_rect.height();
 +
 +  // create bitmap
@@ -1663,8 +1663,8 @@ index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa
 +    RTC_LOG(LS_ERROR) << "UpdateLayeredWindowIndirect Failed: error=" << GetLastError();
 +  }
 +#else // USE_GDIPLUS
-+  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi) border_hwnd=" << border_hwnd << " window_rect=(" 
-+    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")" 
++  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi) border_hwnd=" << border_hwnd << " window_rect=("
++    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")"
 +    << ", " << window_rect.width() << "x" << window_rect.height();
 +
 +  HDC hDC = ::GetDC(NULL);
@@ -2117,7 +2117,7 @@ index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa
 +  DWORD dwExStyle = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_TOPMOST;
 +  DWORD dwStyle = WS_POPUP | WS_DISABLED; // create border window without WS_BORDER style
 +  border_hwnd_ = ::CreateWindowExW(dwExStyle, kWindowClass, L"", dwStyle,
-+                              window_rect.left(), window_rect.top(), window_rect.width(), window_rect.height(), 
++                              window_rect.left(), window_rect.top(), window_rect.width(), window_rect.height(),
 +                              /*parent_window=*/nullptr, /*menu_bar=*/nullptr, window_instance_,
 +                              /*additional_params=*/nullptr);
 +  if (nullptr == border_hwnd_) {
@@ -2126,7 +2126,7 @@ index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa
 +    return false;
 +  }
 +
-+  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ << 
++  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ <<
 +                      " (" << window_rect.left() << ", " << window_rect.top() << ") " << window_rect.width() << "x" << window_rect.height();
 +  ::ShowWindow(border_hwnd_, SW_SHOWNA);
 +
@@ -2148,7 +2148,7 @@ index 0000000000000000000000000000000000000000..cf893d6d2d9cf21bb7b0a998af2c02fa
 +
 +}  // namespace webrtc
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index cbbc500613636ebaca432aa3b645ab4b382786db..1ccb391688e34c1d9912362953a3482237ee71f0 100644
+index cbbc500613636ebaca432aa3b645ab4b382786db..2a2062613c0bd18f9a4c0dd2a4277ccaa7a7de9f 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
 @@ -24,6 +24,7 @@
@@ -2186,7 +2186,7 @@ index cbbc500613636ebaca432aa3b645ab4b382786db..1ccb391688e34c1d9912362953a34822
 +  bool first_capture_;
 +  std::unique_ptr<WindowBorder> window_border_;
 +  //+by xxlang@2021-10-21 }
-+  
++
    RTC_DISALLOW_COPY_AND_ASSIGN(WindowCapturerMac);
  };
  

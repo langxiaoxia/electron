@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Xiaoxia Lang <xxlang@grandstream.cn>
-Date: Mon, 10 Oct 2022 18:55:21 +0800
+Date: Fri, 21 Oct 2022 17:38:35 +0800
 Subject: add_share_mask
 
 
@@ -304,7 +304,7 @@ index c01691cd39b233839b15217cc0d388f980ac79fa..bb09b9cd46c44d7d98d9a273759ad075
                     << ", root_window=" << root_window_
                     << ", source_window=" << source_window_
 diff --git a/modules/desktop_capture/window_border_mac.mm b/modules/desktop_capture/window_border_mac.mm
-index 865cad79e2cbe91f7278fb2290f188134ac16106..77ceba05d045af99856b25ea0ed706d35e7ccde3 100644
+index 3638514fe3d344a7feeb117ef943a5cead35cb67..de59ac6cc0642be02c4bb8b7a85fde58a50c60a5 100644
 --- a/modules/desktop_capture/window_border_mac.mm
 +++ b/modules/desktop_capture/window_border_mac.mm
 @@ -74,6 +74,7 @@ bool IsWindowValid(CGWindowID id) {
@@ -401,7 +401,7 @@ index 865cad79e2cbe91f7278fb2290f188134ac16106..77ceba05d045af99856b25ea0ed706d3
 +      RTC_LOG(LS_ERROR) << "Timer Event Handler(" << pThis << "): source window is invalid";
        return;
      }
-     
+ 
      if (nil == border_window_) {
 -      RTC_LOG(LS_WARNING) << "Timer Event Handler(" << pThis << "): border window is invalid";
 +      RTC_LOG(LS_ERROR) << "Timer Event Handler(" << pThis << "): border window is invalid";
@@ -453,9 +453,7 @@ index 865cad79e2cbe91f7278fb2290f188134ac16106..77ceba05d045af99856b25ea0ed706d3
      if (border_order_old != border_order_new) {
 -//      RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): border order " << border_order_old << " => " << border_order_new;
 +     RTC_LOG(LS_VERBOSE) << "Timer Event Handler(" << pThis << "): border order " << border_order_old << " => " << border_order_new;
-     }
--    
--    NSRect border_nsrect =  [border_window_ frame];
++    }
 +    // window order : put mask above border.
 +    if (IsWindowValid(mask_id_)) {
 +      NSInteger mask_order_old = [mask_window_ orderedIndex];
@@ -464,8 +462,9 @@ index 865cad79e2cbe91f7278fb2290f188134ac16106..77ceba05d045af99856b25ea0ed706d3
 +      if (mask_order_old != mask_order_new) {
 +       RTC_LOG(LS_VERBOSE) << "Timer Event Handler(" << pThis << "): mask order " << mask_order_old << " => " << mask_order_new;
 +      }
-+    }
-+
+     }
+ 
+-    NSRect border_nsrect =  [border_window_ frame];
 +    // move or resize window.
      DesktopRect source_rect = GetWindowBounds(source_id_);
      gfx::Rect source_gfxrect(source_rect.left(), source_rect.top(), source_rect.width(), source_rect.height());
@@ -499,7 +498,7 @@ index 865cad79e2cbe91f7278fb2290f188134ac16106..77ceba05d045af99856b25ea0ed706d3
      border_window_ = nil; // ARC
      RTC_LOG(LS_INFO) << "Border closed";
 diff --git a/modules/desktop_capture/window_border_win.cc b/modules/desktop_capture/window_border_win.cc
-index cf893d6d2d9cf21bb7b0a998af2c02fa396222d4..8c1d39dc3499577ad5b0c1234e1aba5c03c35e8b 100644
+index 291fd9739f3d9ac0122887da01eb0b77f91af852..a9a4d287be7898f5bec50ba1f310a7b2263a5337 100644
 --- a/modules/desktop_capture/window_border_win.cc
 +++ b/modules/desktop_capture/window_border_win.cc
 @@ -34,9 +34,11 @@ class WindowBorderWin : public WindowBorder {
@@ -522,17 +521,6 @@ index cf893d6d2d9cf21bb7b0a998af2c02fa396222d4..8c1d39dc3499577ad5b0c1234e1aba5c
    WindowCaptureHelperWin window_capture_helper_;
  
    RTC_DISALLOW_COPY_AND_ASSIGN(WindowBorderWin);
-@@ -78,8 +81,8 @@ void UpdateBorderWindow(HWND border_hwnd, const DesktopRect &window_rect) {
-   POINT ptSrc = {0, 0};
- 
- #ifdef USE_GDIPLUS
--//  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi+) border_hwnd=" << border_hwnd << " window_rect=(" 
--//    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")" 
-+//  RTC_LOG(LS_INFO) << "UpdateBorderWindow(gdi+) border_hwnd=" << border_hwnd << " window_rect=("
-+//    << window_rect.left() << ", " << window_rect.top() << ")-(" << window_rect.right() << ", " << window_rect.bottom() << ")"
- //    << ", " << window_rect.width() << "x" << window_rect.height();
- 
-   // create bitmap
 @@ -343,39 +346,77 @@ VOID CALLBACK UpdateWindowTimerProc(HWND border_hwnd, UINT message, UINT idTimer
      return;
    }
@@ -660,13 +648,13 @@ index cf893d6d2d9cf21bb7b0a998af2c02fa396222d4..8c1d39dc3499577ad5b0c1234e1aba5c
      return false;
    }
  
--  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ << 
-+  RTC_LOG(LS_WARNING) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ << 
+-  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ <<
++  RTC_LOG(LS_WARNING) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId() << ": border_hwnd=" << border_hwnd_ <<
                        " (" << window_rect.left() << ", " << window_rect.top() << ") " << window_rect.width() << "x" << window_rect.height();
    ::ShowWindow(border_hwnd_, SW_SHOWNA);
  
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index 8da40ab970b719d9cec8921cea4363b806598a59..0cd4448cb46854f9a0e9aaa337e53871b6922730 100644
+index d7f85ccfcf978268b909081e2a76088ffe79c8e1..07ccc0431c57a1eb459a18282e30ca185f902768 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
 @@ -181,13 +181,18 @@ explicit WindowCapturerMac(

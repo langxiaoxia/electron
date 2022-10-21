@@ -228,7 +228,7 @@ index df2ad518c8623cfa5492326f6c2f9ae4c3010398..611f673e004878b2d7c9865fce1a14ed
  
      // Add combination of user-friendly and unique name to the output list.
 diff --git a/services/audio/public/cpp/audio_device_description_mojom_traits.cc b/services/audio/public/cpp/audio_device_description_mojom_traits.cc
-index 6c675283f502c0dfb5aa231dd6cb7f8a2f892c2e..9d2ef4f5c8541e8b6bdb2176e255ea17325ece4d 100644
+index 6c675283f502c0dfb5aa231dd6cb7f8a2f892c2e..3cdc4ce49b84b64b8c617f0a4c1dcd783fe81f31 100644
 --- a/services/audio/public/cpp/audio_device_description_mojom_traits.cc
 +++ b/services/audio/public/cpp/audio_device_description_mojom_traits.cc
 @@ -12,7 +12,8 @@ bool StructTraits<audio::mojom::AudioDeviceDescriptionDataView,
@@ -236,7 +236,7 @@ index 6c675283f502c0dfb5aa231dd6cb7f8a2f892c2e..9d2ef4f5c8541e8b6bdb2176e255ea17
    return data.ReadDeviceName(&output->device_name) &&
           data.ReadUniqueId(&output->unique_id) &&
 -         data.ReadGroupId(&output->group_id);
-+         data.ReadGroupId(&output->group_id) && 
++         data.ReadGroupId(&output->group_id) &&
 +         data.ReadContainerId(&output->container_id); //+by xxlang2021-09-06
  }
  
