@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 25 Oct 2022 12:14:53 +0800
+Subject: add_mask_id
+
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index fa1d046e86b5a25d5c563c93f42ff4cfb9da45f0..4c08076eab784f9168abb51f67506847cdfd102d 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -120,6 +120,8 @@ class DesktopCaptureDevice::Core : public webrtc::DesktopCapturer::Callback {
+ 
+   void SetNotificationWindowId(gfx::NativeViewId window_id);
+ 
++  void SetMaskWindowId(gfx::NativeViewId window_id); //+by xxlang@2022-10-14 : mask id
++
+   void SetMockTimeForTesting(
+       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+       const base::TickClock* tick_clock);
+@@ -278,6 +280,15 @@ void DesktopCaptureDevice::Core::SetNotificationWindowId(
+   desktop_capturer_->SetExcludedWindow(window_id);
+ }
+ 
++//+by xxlang@2022-10-14 : mask id {
++void DesktopCaptureDevice::Core::SetMaskWindowId(
++    gfx::NativeViewId window_id) {
++  DCHECK(task_runner_->BelongsToCurrentThread());
++  DCHECK(window_id);
++  desktop_capturer_->SetMaskWindow(window_id);
++}
++//+by xxlang@2022-10-14 : mask id }
++
+ void DesktopCaptureDevice::Core::SetMockTimeForTesting(
+     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+     const base::TickClock* tick_clock) {
+@@ -532,7 +543,7 @@ base::TimeTicks DesktopCaptureDevice::Core::NowTicks() const {
+ 
+ // static
+ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+-    const DesktopMediaID& source) {
++    const DesktopMediaID& source, const DesktopMediaID& mask) { //+by xxlang@2022-10-14 : mask id
+   auto options = desktop_capture::CreateDesktopCaptureOptions();
+   std::unique_ptr<webrtc::DesktopCapturer> capturer;
+   std::unique_ptr<media::VideoCaptureDevice> result;
+@@ -580,6 +591,7 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+ #endif
+       if (window_capturer && window_capturer->SelectSource(source.id)) {
+         window_capturer->FocusOnSelectedSource();
++        window_capturer->SetMaskWindow(mask.id); //+by xxlang@2022-10-14 : mask id
+         capturer = std::make_unique<webrtc::DesktopAndCursorComposer>(
+             std::move(window_capturer), options);
+         IncrementDesktopCaptureCounter(WINDOW_CAPTURER_CREATED);
+@@ -629,6 +641,18 @@ void DesktopCaptureDevice::SetNotificationWindowId(
+                                 base::Unretained(core_.get()), window_id));
+ }
+ 
++//+by xxlang@2022-10-14 : mask id {
++void DesktopCaptureDevice::SetMaskWindowId(
++    gfx::NativeViewId window_id) {
++  // This may be called after the capturer has been stopped.
++  if (!core_)
++    return;
++  thread_.task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::SetMaskWindowId,
++                                base::Unretained(core_.get()), window_id));
++}
++//+by xxlang@2022-10-14 : mask id }
++
+ DesktopCaptureDevice::DesktopCaptureDevice(
+     std::unique_ptr<webrtc::DesktopCapturer> capturer,
+     DesktopMediaID::Type type)
+diff --git a/content/browser/media/capture/desktop_capture_device.h b/content/browser/media/capture/desktop_capture_device.h
+index 58f14fb672766639fc168ef9697455b24ddbcada..46fcee0dff49fe3f2c36b1c4c28e827818df68d9 100644
+--- a/content/browser/media/capture/desktop_capture_device.h
++++ b/content/browser/media/capture/desktop_capture_device.h
+@@ -39,7 +39,7 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
+   // DesktopCaptureDevice for it. May return NULL in case of a failure (e.g. if
+   // requested window was destroyed).
+   static std::unique_ptr<media::VideoCaptureDevice> Create(
+-      const DesktopMediaID& source);
++      const DesktopMediaID& source, const DesktopMediaID& mask); //+by xxlang@2022-10-14 : mask id
+ 
+   ~DesktopCaptureDevice() override;
+ 
+@@ -51,6 +51,9 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
+   // Set the platform-dependent window id for the notification window.
+   void SetNotificationWindowId(gfx::NativeViewId window_id);
+ 
++  // Set the platform-dependent window id for the mask window.
++  void SetMaskWindowId(gfx::NativeViewId window_id); //+by xxlang@2022-10-14 : mask id
++
+  private:
+   friend class DesktopCaptureDeviceTest;
+   friend class DesktopCaptureDeviceThrottledTest;
+diff --git a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+index 263475893d3574bbed362dc71b1f4236528f96c8..a5012b901e7105c6a9dba7c193ee3a9c78579860 100644
+--- a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
++++ b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+@@ -408,8 +408,10 @@ void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
+   if (base::FeatureList::IsEnabled(features::kDesktopCaptureMacV2))
+     video_capture_device = CreateDesktopCaptureDeviceMac(desktop_id);
+ #endif
+-  if (!video_capture_device)
+-    video_capture_device = DesktopCaptureDevice::Create(desktop_id);
++  if (!video_capture_device) {
++    const content::DesktopMediaID mask_id = content::DesktopMediaID::Parse(params.mask_id); //+by xxlang@2022-10-14 : mask id
++    video_capture_device = DesktopCaptureDevice::Create(desktop_id, mask_id); //+by xxlang@2022-10-14 : mask id
++  }
+ #endif
+ 
+   if (video_capture_device)
+diff --git a/media/capture/mojom/video_capture_types.mojom b/media/capture/mojom/video_capture_types.mojom
+index c2778d818da888121455762c8a079bba5090e9b5..637247d42fd1b9e0192c4bd451ab119740cc1c1e 100644
+--- a/media/capture/mojom/video_capture_types.mojom
++++ b/media/capture/mojom/video_capture_types.mojom
+@@ -284,6 +284,7 @@ struct VideoCaptureParams {
+   ResolutionChangePolicy resolution_change_policy;
+   PowerLineFrequency power_line_frequency;
+   bool enable_face_detection;
++  string mask_id; //+by xxlang@2022-10-14 : mask id
+ };
+ 
+ // |resource_utilization| reports that the frame incurred some fractional
+diff --git a/media/capture/mojom/video_capture_types_mojom_traits.cc b/media/capture/mojom/video_capture_types_mojom_traits.cc
+index c77bdd8148e92cded32fade3e0d0596bce9073ec..1b537da0c8ebd7ec04c8da09aa515c21dbfa1b85 100644
+--- a/media/capture/mojom/video_capture_types_mojom_traits.cc
++++ b/media/capture/mojom/video_capture_types_mojom_traits.cc
+@@ -1713,6 +1713,10 @@ bool StructTraits<media::mojom::VideoCaptureParamsDataView,
+   if (!data.ReadPowerLineFrequency(&out->power_line_frequency))
+     return false;
+   out->enable_face_detection = data.enable_face_detection();
++  //+by xxlang@2022-10-14 : mask id {
++  if (!data.ReadMaskId(&out->mask_id))
++    return false;
++  //+by xxlang@2022-10-14 : mask id }
+   return true;
+ }
+ 
+diff --git a/media/capture/mojom/video_capture_types_mojom_traits.h b/media/capture/mojom/video_capture_types_mojom_traits.h
+index d47081e700fc009c5cc4e7a11a145eed2c0ccb83..129637df3ee85eae6d435dfc04264f5a363723d8 100644
+--- a/media/capture/mojom/video_capture_types_mojom_traits.h
++++ b/media/capture/mojom/video_capture_types_mojom_traits.h
+@@ -173,6 +173,13 @@ struct COMPONENT_EXPORT(MEDIA_CAPTURE_MOJOM_TRAITS)
+     return params.enable_face_detection;
+   }
+ 
++  //+by xxlang@2022-10-14 : mask id {
++  static const std::string& mask_id(
++      const media::VideoCaptureParams& params) {
++    return params.mask_id;
++  }
++  //+by xxlang@2022-10-14 : mask id }
++
+   static bool Read(media::mojom::VideoCaptureParamsDataView data,
+                    media::VideoCaptureParams* out);
+ };
+diff --git a/media/capture/video_capture_types.h b/media/capture/video_capture_types.h
+index 051b9765f16de63f058337e32beab9c614c29c01..bed5e741447f3ecda95f5b7b5710ed02766faccc 100644
+--- a/media/capture/video_capture_types.h
++++ b/media/capture/video_capture_types.h
+@@ -318,6 +318,8 @@ struct CAPTURE_EXPORT VideoCaptureParams {
+   // exposures around the face area. Currently only applicable on
+   // Android platform with Camera2 driver support.
+   bool enable_face_detection;
++
++  std::string mask_id; //+by xxlang@2022-10-14 : mask id
+ };
+ 
+ }  // namespace media

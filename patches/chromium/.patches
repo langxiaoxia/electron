@@ -182,3 +182,5 @@ match_containerid_for_hid_on_mac.patch
 match_containerid_for_hid_on_linux.patch
 treat_info_and_verbose_as_different_verbosity_level.patch
 fix_deps_buildtools_linux64.patch
+add_mask_id.patch
+add_constraints_chrome_media_mask_id.patch
