@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Wed, 9 Nov 2022 15:34:05 +0800
+Subject: fix_share_desktop_audio_echo
+
+
+diff --git a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+index 110a2519074a2cedf0133aa619e6f51ad946e9bd..b01502e4d5303eb9b4bf333a2d63241e9d248629 100644
+--- a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
++++ b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+@@ -1403,7 +1403,7 @@ UserMediaProcessor::CreateAudioSource(
+   blink::AudioProcessingProperties audio_processing_properties =
+       current_request_info_->audio_capture_settings()
+           .audio_processing_properties();
+-  if (blink::IsScreenCaptureMediaType(device.type) ||
++  if (//blink::IsScreenCaptureMediaType(device.type) ||
+       !blink::MediaStreamAudioProcessor::WouldModifyAudio(
+           audio_processing_properties)) {
+     return std::make_unique<blink::LocalMediaStreamAudioSource>(
