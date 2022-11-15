@@ -653,26 +653,50 @@ index 7f1c4ac6e8347d0fbf197c02a69a8a64b6beb73b..91401b1a2354dfb080898a4548f6379e
          if (!owned_window_capturer_) {
            owned_window_capturer_ = std::make_unique<WindowCapturerWinGdi>();
 diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.h b/modules/desktop_capture/win/window_capturer_win_gdi.h
-index c954c230c991475890b6fcd472bef2d4eeaee682..810d518da60fe9504e6f7e95beecc6f5c82e1b3e 100644
+index c954c230c991475890b6fcd472bef2d4eeaee682..58031fd94e5db16ace000a5470cfd5302bfdb561 100644
 --- a/modules/desktop_capture/win/window_capturer_win_gdi.h
 +++ b/modules/desktop_capture/win/window_capturer_win_gdi.h
-@@ -38,6 +38,7 @@ class WindowCapturerWinGdi : public DesktopCapturer {
-   // DesktopCapturer interface.
-   void Start(Callback* callback) override;
-   void CaptureFrame() override;
-+  void SetMaskWindow(WindowId window) override;  //+by xxlang@2022-10-14 : mask id
-   bool GetSourceList(SourceList* sources) override;
-   bool SelectSource(SourceId id) override;
-   bool FocusOnSelectedSource() override;
-@@ -57,6 +58,8 @@ class WindowCapturerWinGdi : public DesktopCapturer {
-   // selected.
-   HWND window_ = nullptr;
+@@ -35,12 +35,13 @@ class WindowCapturerWinGdi : public DesktopCapturer {
+   static std::unique_ptr<DesktopCapturer> CreateRawWindowCapturer(
+       const DesktopCaptureOptions& options);
  
+-  // DesktopCapturer interface.
+-  void Start(Callback* callback) override;
+-  void CaptureFrame() override;
+-  bool GetSourceList(SourceList* sources) override;
+-  bool SelectSource(SourceId id) override;
+-  bool FocusOnSelectedSource() override;
++  // DesktopCapturer interface.
++  void Start(Callback* callback) override;
++  void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override;  //+by xxlang@2022-10-14 : mask id
++  bool GetSourceList(SourceList* sources) override;
++  bool SelectSource(SourceId id) override;
++  bool FocusOnSelectedSource() override;
+   bool IsOccluded(const DesktopVector& pos) override;
+ 
+  private:
+@@ -54,12 +55,14 @@ class WindowCapturerWinGdi : public DesktopCapturer {
+   Callback* callback_ = nullptr;
+ 
+   // HWND and HDC for the currently selected window or nullptr if window is not
+-  // selected.
+-  HWND window_ = nullptr;
+-
+-  DesktopSize previous_size_;
+-
+-  WindowCaptureHelperWin window_capture_helper_;
++  // selected.
++  HWND window_ = nullptr;
++
 +  HWND mask_window_ = nullptr;  //+by xxlang@2022-10-14 : mask id
 +
-   DesktopSize previous_size_;
++  DesktopSize previous_size_;
++
++  WindowCaptureHelperWin window_capture_helper_;
  
-   WindowCaptureHelperWin window_capture_helper_;
+   // This map is used to avoid flickering for the case when SelectWindow() calls
+   // are interleaved with Capture() calls.
 diff --git a/modules/desktop_capture/window_border.h b/modules/desktop_capture/window_border.h
 index d81bae8c69354839a6ad97e96b0174b13cc3b84f..5b8fb5595fb0012a9b59678febd7e1b2c8a279a9 100644
 --- a/modules/desktop_capture/window_border.h

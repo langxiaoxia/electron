@@ -5,7 +5,7 @@ Subject: fix_pause_capture_on_mac_mojave
 
 
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index e3f2ef07c064f61fb7422ffa0c711be3e7600e86..8da40ab970b719d9cec8921cea4363b806598a59 100644
+index 71092e8ba623562edd97ed31258ea2c0ae141cfc..d7f85ccfcf978268b909081e2a76088ffe79c8e1 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
 @@ -222,7 +222,11 @@ explicit WindowCapturerMac(
