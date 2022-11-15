@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 15 Nov 2022 16:57:28 +0800
+Subject: fix_getwindowlist_on_mac
+
+
+diff --git a/modules/desktop_capture/mac/window_list_utils.cc b/modules/desktop_capture/mac/window_list_utils.cc
+index 87fb543a10db818a81685a77879e6a4d54b3c5a8..cdbf9ca32352d4425230dd5c2892541e1e459456 100644
+--- a/modules/desktop_capture/mac/window_list_utils.cc
++++ b/modules/desktop_capture/mac/window_list_utils.cc
+@@ -22,6 +22,7 @@
+ #include <utility>
+ 
+ #include "rtc_base/checks.h"
++#include "rtc_base/logging.h"
+ 
+ static_assert(static_cast<webrtc::WindowId>(kCGNullWindowID) ==
+                   webrtc::kNullWindowId,
+@@ -182,6 +183,7 @@ bool GetWindowList(DesktopCapturer::SourceList* windows,
+             // the check in the map. Also skip the window if owner name is
+             // empty too.
+             if (!owner_name.empty() && (itr == pid_itr_map.end())) {
++              RTC_LOG(LS_INFO) << "GetWindowList: Add window_id=" << window_id << ", owner_pid=" << pid << ", owner_name=" << owner_name;
+               sources.push_back(DesktopCapturer::Source{window_id, owner_name});
+               RTC_DCHECK(!sources.empty());
+               // Get an iterator on the last valid element in the source list.
+@@ -191,16 +193,29 @@ bool GetWindowList(DesktopCapturer::SourceList* windows,
+                   std::pair<int,
+                             std::list<DesktopCapturer::Source>::const_iterator>(
+                       pid, last_source));
++            } else {
++              RTC_LOG(LS_INFO) << "GetWindowList: Skip window_id=" << window_id << ", owner_pid=" << pid << ", owner_name=" << owner_name;
+             }
+           } else {
++            RTC_LOG(LS_INFO) << "GetWindowList: Add window_id=" << window_id << ", owner_pid=" << pid << ", title=" << title;
+             sources.push_back(DesktopCapturer::Source{window_id, title});
+             // Once the window with empty title has been removed no other empty
+             // windows are allowed for the same pid.
+             if (itr != pid_itr_map.end() && (itr->second != sources.end())) {
++              RTC_LOG(LS_INFO) << "GetWindowList: Remove window_id=" << itr->second->id << ", owner_pid=" << itr->first << ", owner_name=" << itr->second->title;
+               sources.erase(itr->second);
+               // sdt::list::end() never changes during the lifetime of that
+               // list.
+               itr->second = sources.end();
++            } else if (itr == pid_itr_map.end()) {
++              // Once the window with title has been added no other empty
++              // windows are allowed for the same pid.
++              // std::list::end() never changes during the lifetime of that
++              // list.
++              pid_itr_map.insert(
++                  std::pair<int,
++                            std::list<DesktopCapturer::Source>::const_iterator>(
++                      pid, sources.end()));
+             }
+           }
+         }
+diff --git a/modules/desktop_capture/window_border_mac.mm b/modules/desktop_capture/window_border_mac.mm
+index de59ac6cc0642be02c4bb8b7a85fde58a50c60a5..495b3438fb724f5654562de1a71240853b8cc326 100644
+--- a/modules/desktop_capture/window_border_mac.mm
++++ b/modules/desktop_capture/window_border_mac.mm
+@@ -235,6 +235,7 @@ bool IsWindowValid(CGWindowID id) {
+   [border_window_ setLevel:border_level]; // set border level same as source
+   [border_window_ orderWindow:NSWindowAbove relativeTo:source_id]; // set border above source
+   [border_window_ setSharingType:NSWindowSharingNone];
++  [border_window_ setCollectionBehavior:[border_window_ collectionBehavior] | NSWindowCollectionBehaviorTransient];
+ 
+   NSInteger border_id = [border_window_ windowNumber];
+   NSInteger border_order = [border_window_ orderedIndex];
