@@ -11,6 +11,7 @@ type DefaultAppOptions = {
   version: boolean;
   webdriver: boolean;
   interactive: boolean;
+  tag: boolean; // +by xxlang@2021-12-09
   abi: boolean;
   modules: string[];
 }
@@ -26,6 +27,7 @@ const option: DefaultAppOptions = {
   version: false,
   webdriver: false,
   interactive: false,
+  tag: false, // +by xxlang@2021-12-09
   abi: false,
   modules: []
 };
@@ -50,6 +52,11 @@ for (const arg of argv) {
   } else if (arg === '--require' || arg === '-r') {
     nextArgIsRequire = true;
     continue;
+  // +by xxlang@2021-12-09 {
+  } else if (arg === '--tag' || arg === '-t') {
+    option.tag = true;
+    continue;
+  // +by xxlang@2021-12-09 }
   } else if (arg === '--abi' || arg === '-a') {
     option.abi = true;
     continue;
@@ -258,6 +265,11 @@ if (option.file && !option.webdriver) {
 } else if (option.version) {
   console.log('v' + process.versions.electron);
   process.exit(0);
+// +by xxlang@2021-12-09 {
+} else if (option.tag) {
+  console.log(process.versions.tag);
+  process.exit(0);
+// +by xxlang@2021-12-09 }
 } else if (option.abi) {
   console.log(process.versions.modules);
   process.exit(0);
@@ -280,6 +292,7 @@ Options:
   -i, --interactive     Open a REPL to the main process.
   -r, --require         Module to preload (option can be repeated).
   -v, --version         Print the version.
+  -t, --tag             Print the tag.
   -a, --abi             Print the Node ABI version.`;
 
     console.log(welcomeMessage);

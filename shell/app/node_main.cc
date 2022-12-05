@@ -245,6 +245,8 @@ int NodeMain(int argc, char* argv[]) {
       gin_helper::Dictionary versions;
       if (process.Get("versions", &versions)) {
         versions.SetReadOnly(ELECTRON_PROJECT_NAME, ELECTRON_VERSION_STRING);
+        versions.SetReadOnly("tag",
+                             ELECTRON_TAG_STRING);  //+by xxlang@2021-12-09
       }
     }
 

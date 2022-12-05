@@ -88,6 +88,7 @@ void ElectronBindings::BindTo(v8::Isolate* isolate,
   if (dict.Get("versions", &versions)) {
     versions.SetReadOnly(ELECTRON_PROJECT_NAME, ELECTRON_VERSION_STRING);
     versions.SetReadOnly("chrome", CHROME_VERSION_STRING);
+    versions.SetReadOnly("tag", ELECTRON_TAG_STRING);  //+by xxlang@2021-12-09
   }
 }
 
