@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Wed, 7 Dec 2022 12:53:11 +0800
+Subject: chore: treat info and verbose as different verbosity level.
+
+Treat INFO as v=0 and VERBOSE as v=1 for webrtc RTC_LOG.
+
+diff --git a/third_party/webrtc_overrides/rtc_base/logging.cc b/third_party/webrtc_overrides/rtc_base/logging.cc
+index 87ae618c49629dbb32b5d0fc00134c783ef73cb2..c8e8c884462e1aeb7e6c16aff6812137adf41fc3 100644
+--- a/third_party/webrtc_overrides/rtc_base/logging.cc
++++ b/third_party/webrtc_overrides/rtc_base/logging.cc
+@@ -85,7 +85,8 @@ inline int WebRtcVerbosityLevel(LoggingSeverity sev) {
+       return -2;
+     case LS_WARNING:
+       return -1;
+-    case LS_INFO:  // We treat 'info' and 'verbose' as the same verbosity level.
++    case LS_INFO:  // We treat 'info' and 'verbose' as the different verbosity level.
++      return 0;
+     case LS_VERBOSE:
+       return 1;
+     case LS_SENSITIVE:
