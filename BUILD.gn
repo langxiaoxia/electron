@@ -845,6 +845,13 @@ if (is_mac) {
     group("electron_framework_libraries") {
     }
   }
+
+  bundle_data("electron_gsfec_library") {
+    sources = [ "$root_out_dir/librsfec.dylib" ]
+    outputs = [ "{{bundle_contents_dir}}/Libraries/{{source_file_part}}" ]
+    public_deps = [ "//third_party/webrtc/modules/rtp_rtcp:copy_gsfec_runtime" ]
+  }
+
   if (use_egl) {
     # Add the ANGLE .dylibs in the Libraries directory of the Framework.
     bundle_data("electron_angle_binaries") {
@@ -904,12 +911,14 @@ if (is_mac) {
     }
     public_deps = [
       ":electron_framework_libraries",
+      ":electron_gsfec_library",
       ":electron_lib",
     ]
     deps = [
       ":electron_angle_library",
       ":electron_framework_libraries",
       ":electron_framework_resources",
+      ":electron_gsfec_library",
       ":electron_swiftshader_library",
       ":electron_xibs",
     ]
@@ -950,7 +959,9 @@ if (is_mac) {
     # @loader_path. However the ffmpeg.dylib is moved to a different place
     # when generating app bundle, and we should change to link from @rpath.
     if (is_component_ffmpeg && !is_component_build) {
-      ldflags += [ "-Wcrl,installnametool,-change,@loader_path/libffmpeg.dylib,@rpath/libffmpeg.dylib" ]
+      ldflags += [ "-Wcrl,installnametool,-change,@loader_path/libffmpeg.dylib,@rpath/libffmpeg.dylib,-change,@loader_path/librsfec.dylib,@rpath/librsfec.dylib" ]
+    } else {
+      ldflags += [ "-Wcrl,installnametool,-change,@loader_path/librsfec.dylib,@rpath/librsfec.dylib" ]
     }
   }
 
@@ -1244,7 +1255,7 @@ if (is_mac) {
     ]
 
     data = []
-    data_deps = []
+    data_deps = [ "//third_party/webrtc/modules/rtp_rtcp:copy_gsfec_runtime" ]
 
     data += [ "$root_out_dir/resources.pak" ]
     data += [ "$root_out_dir/chrome_100_percent.pak" ]
