@@ -131,3 +131,4 @@ cherry-pick-933cc81c6bad.patch
 treat_info_and_verbose_as_different_verbosity_level.patch
 add_rnnoise_ns.patch
 add_rnn_noise_supression.patch
+add_desktop_capture_border

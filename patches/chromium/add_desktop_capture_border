@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 16 Dec 2022 18:51:16 +0800
+Subject: feat: add border for desktop capture.
+
+Add red border for desktop capture screen and window.
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index 725784a5fc2f0d52b2485f19410b707391212c0e..dee4e0380aee1350ae1d3186d154b6d973e8c953 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -543,6 +543,11 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+               DesktopCapturerLacros::CaptureType::kScreen,
+               webrtc::DesktopCaptureOptions());
+ #else
++      //+by xxlang : window border {
++      if (base::FeatureList::IsEnabled(features::kWebRtcDesktopCapturerBorder)) {
++        options.set_enable_border(true);
++      }
++      //+by xxlang : window border }
+       std::unique_ptr<webrtc::DesktopCapturer> screen_capturer(
+           webrtc::DesktopCapturer::CreateScreenCapturer(options));
+ #endif
+@@ -563,6 +568,11 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+           new DesktopCapturerLacros(DesktopCapturerLacros::CaptureType::kWindow,
+                                     webrtc::DesktopCaptureOptions()));
+ #else
++      //+by xxlang : window border {
++      if (base::FeatureList::IsEnabled(features::kWebRtcDesktopCapturerBorder)) {
++        options.set_enable_border(true);
++      }
++      //+by xxlang : window border }
+       std::unique_ptr<webrtc::DesktopCapturer> window_capturer =
+           webrtc::DesktopCapturer::CreateWindowCapturer(options);
+ #endif
+diff --git a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+index 7bf446578a35b4c946fdf99681791bfae2cf7f08..e0a5bf11ee692bbf6fb56f91d31ab43eb1b47d3e 100644
+--- a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
++++ b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+@@ -32,6 +32,7 @@
+ #include "media/capture/video/video_capture_device_client.h"
+ #include "media/capture/video/video_frame_receiver.h"
+ #include "media/capture/video/video_frame_receiver_on_task_runner.h"
++#include "media/webrtc/webrtc_features.h" //+by xxlang : window border
+ #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+ 
+ #if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+@@ -249,7 +250,8 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
+       }
+ 
+ #if defined(USE_AURA) || BUILDFLAG(IS_MAC)
+-      if (desktop_id.window_id != DesktopMediaID::kNullId) {
++      if (desktop_id.window_id != DesktopMediaID::kNullId && !base::FeatureList::IsEnabled(features::kWebRtcDesktopCapturerBorder)) { //+by xxlang : window border
++        LOG(INFO) << "UsingVizFrameSinkCapturer for " << desktop_id.ToString();
+         // For the other capturers, when a bug reports the type of capture it's
+         // easy enough to determine which capturer was used, but it's a little
+         // fuzzier with window capture.
+@@ -280,6 +282,7 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
+ #endif
+ 
+       // All cases other than tab capture or Aura desktop/window capture.
++      LOG(INFO) << "UsingDesktopCapturer for " << desktop_id.ToString();
+       TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
+                            "UsingDesktopCapturer", TRACE_EVENT_SCOPE_THREAD);
+       start_capture_closure = base::BindOnce(
+@@ -494,6 +497,7 @@ void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
+       implementation = kScreenCaptureKitDeviceMac;
+   }
+   if (!video_capture_device &&
++      !base::FeatureList::IsEnabled(features::kWebRtcDesktopCapturerBorder) && //+by xxlang : window border
+       base::FeatureList::IsEnabled(kDesktopCaptureMacV2)) {
+     if ((video_capture_device = CreateDesktopCaptureDeviceMac(desktop_id)))
+       implementation = kDesktopCaptureDeviceMac;
+diff --git a/media/webrtc/webrtc_features.cc b/media/webrtc/webrtc_features.cc
+index 52e9dd5533551f25e54f41ee71c569c06f0f67ad..60a84c07906ad1e477e7d9a63026749f798a6e50 100644
+--- a/media/webrtc/webrtc_features.cc
++++ b/media/webrtc/webrtc_features.cc
+@@ -51,4 +51,14 @@ const base::Feature kWebRtcAnalogAgcClippingControl{
+ const base::Feature kWebRtcAnalogAgcStartupMinVolume{
+     "WebRtcAnalogAgcStartupMinVolume", base::FEATURE_DISABLED_BY_DEFAULT};
+ 
++//+by xxlang : window border {
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++const base::Feature kWebRtcDesktopCapturerBorder{
++    "WebRtcDesktopCapturerBorder", base::FEATURE_ENABLED_BY_DEFAULT};
++#else
++const base::Feature kWebRtcDesktopCapturerBorder{
++    "WebRtcDesktopCapturerBorder", base::FEATURE_DISABLED_BY_DEFAULT};
++#endif
++//+by xxlang : window border }
++
+ }  // namespace features
+diff --git a/media/webrtc/webrtc_features.h b/media/webrtc/webrtc_features.h
+index eacc42d9204d7f4d73cb9ee9b5d11b296d18e33b..4a9b3107e70391f15fcb146e09d0c7e0a3d2cc77 100644
+--- a/media/webrtc/webrtc_features.h
++++ b/media/webrtc/webrtc_features.h
+@@ -27,6 +27,9 @@ extern const base::Feature kWebRtcAnalogAgcClippingControl;
+ COMPONENT_EXPORT(MEDIA_WEBRTC)
+ extern const base::Feature kWebRtcAnalogAgcStartupMinVolume;
+ 
++COMPONENT_EXPORT(MEDIA_WEBRTC)
++extern const base::Feature kWebRtcDesktopCapturerBorder; //+by xxlang : window border
++
+ }  // namespace features
+ 
+ #endif  // MEDIA_WEBRTC_WEBRTC_FEATURES_H_
