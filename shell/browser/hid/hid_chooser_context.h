@@ -34,6 +34,7 @@ extern const char kHidDeviceNameKey[];
 extern const char kHidGuidKey[];
 extern const char kHidVendorIdKey[];
 extern const char kHidProductIdKey[];
+extern const char kHidContainerIdKey[];  //+by xxlang : container id
 extern const char kHidSerialNumberKey[];
 
 // Manages the internal state and connection to the device service for the
@@ -63,6 +64,9 @@ class HidChooserContext : public KeyedService,
   // Returns a human-readable string identifier for |device|.
   static std::u16string DisplayNameFromDeviceInfo(
       const device::mojom::HidDeviceInfo& device);
+
+  static std::u16string PhysicalDeviceIdFromDeviceInfo(
+      const device::mojom::HidDeviceInfo& device);  //+by xxlang : container id
 
   // Returns true if a persistent permission can be granted for |device|.
   static bool CanStorePersistentEntry(

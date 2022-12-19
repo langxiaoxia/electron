@@ -37,6 +37,7 @@ const char kHidDeviceNameKey[] = "name";
 const char kHidGuidKey[] = "guid";
 const char kHidVendorIdKey[] = "vendorId";
 const char kHidProductIdKey[] = "productId";
+const char kHidContainerIdKey[] = "containerId";  //+by xxlang : container id
 const char kHidSerialNumberKey[] = "serialNumber";
 
 HidChooserContext::HidChooserContext(ElectronBrowserContext* context)
@@ -63,6 +64,16 @@ std::u16string HidChooserContext::DisplayNameFromDeviceInfo(
   return base::UTF8ToUTF16(device.product_name);
 }
 
+//+by xxlang : container id {
+// static
+std::u16string HidChooserContext::PhysicalDeviceIdFromDeviceInfo(
+    const device::mojom::HidDeviceInfo& device) {
+  return base::UTF8ToUTF16(device.physical_device_id.empty()
+                               ? device.guid
+                               : device.physical_device_id);
+}
+//+by xxlang : container id }
+
 // static
 bool HidChooserContext::CanStorePersistentEntry(
     const device::mojom::HidDeviceInfo& device) {
@@ -78,6 +89,10 @@ base::Value HidChooserContext::DeviceInfoToValue(
       base::UTF16ToUTF8(HidChooserContext::DisplayNameFromDeviceInfo(device)));
   value.SetIntKey(kHidVendorIdKey, device.vendor_id);
   value.SetIntKey(kHidProductIdKey, device.product_id);
+  value.SetStringKey(
+      kHidContainerIdKey,
+      base::UTF16ToUTF8(HidChooserContext::PhysicalDeviceIdFromDeviceInfo(
+          device)));  //+by xxlang : container id
   if (HidChooserContext::CanStorePersistentEntry(device)) {
     // Use the USB serial number as a persistent identifier. If it is
     // unavailable, only ephemeral permissions may be granted.
