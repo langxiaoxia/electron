@@ -133,3 +133,4 @@ add_rnnoise_ns.patch
 add_rnn_noise_supression.patch
 add_desktop_capture_border
 add_container_id.patch
+add_chrome_media_mask_id.patch

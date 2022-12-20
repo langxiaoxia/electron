@@ -2,3 +2,4 @@ add_thread_local_to_x_error_trap_cc.patch
 add_rnn_ns.ptach
 add_gsfec_for_audio.patch
 add_desktop_capture_border
+add_window_capture_mask.patch

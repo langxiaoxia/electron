@@ -1,0 +1,589 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 20 Dec 2022 12:08:15 +0800
+Subject: feat: add chromeMediaMaskId for Web API.
+
+Add chromeMediaMaskId for getUserMedia video constraints.
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index dee4e0380aee1350ae1d3186d154b6d973e8c953..1b666579818ec90a5d71486fdd710ab16b35e413 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -126,6 +126,8 @@ class DesktopCaptureDevice::Core : public webrtc::DesktopCapturer::Callback {
+ 
+   void SetNotificationWindowId(gfx::NativeViewId window_id);
+ 
++  void SetMaskWindowId(gfx::NativeViewId window_id); //+by xxlang : mask id
++
+   void SetMockTimeForTesting(
+       scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+       const base::TickClock* tick_clock);
+@@ -280,6 +282,15 @@ void DesktopCaptureDevice::Core::SetNotificationWindowId(
+   desktop_capturer_->SetExcludedWindow(window_id);
+ }
+ 
++//+by xxlang : mask id {
++void DesktopCaptureDevice::Core::SetMaskWindowId(
++    gfx::NativeViewId window_id) {
++  DCHECK(task_runner_->BelongsToCurrentThread());
++  DCHECK(window_id);
++  desktop_capturer_->SetMaskWindow(window_id);
++}
++//+by xxlang : mask id }
++
+ void DesktopCaptureDevice::Core::SetMockTimeForTesting(
+     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+     const base::TickClock* tick_clock) {
+@@ -516,7 +527,7 @@ base::TimeTicks DesktopCaptureDevice::Core::NowTicks() const {
+ 
+ // static
+ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+-    const DesktopMediaID& source) {
++    const DesktopMediaID& source, const DesktopMediaID& mask) { //+by xxlang : mask id
+   auto options = desktop_capture::CreateDesktopCaptureOptions();
+   std::unique_ptr<webrtc::DesktopCapturer> capturer;
+   std::unique_ptr<media::VideoCaptureDevice> result;
+@@ -577,6 +588,7 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+           webrtc::DesktopCapturer::CreateWindowCapturer(options);
+ #endif
+       if (window_capturer && window_capturer->SelectSource(source.id)) {
++        window_capturer->SetMaskWindow(mask.id); //+by xxlang : mask id
+         capturer = std::make_unique<webrtc::DesktopAndCursorComposer>(
+             std::move(window_capturer), options);
+         IncrementDesktopCaptureCounter(WINDOW_CAPTURER_CREATED);
+@@ -625,6 +637,18 @@ void DesktopCaptureDevice::SetNotificationWindowId(
+                                 core_->GetWeakPtr(), window_id));
+ }
+ 
++//+by xxlang : mask id {
++void DesktopCaptureDevice::SetMaskWindowId(
++    gfx::NativeViewId window_id) {
++  // This may be called after the capturer has been stopped.
++  if (!core_)
++    return;
++  thread_.task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::SetMaskWindowId,
++                                base::Unretained(core_.get()), window_id));
++}
++//+by xxlang : mask id }
++
+ DesktopCaptureDevice::DesktopCaptureDevice(
+     std::unique_ptr<webrtc::DesktopCapturer> capturer,
+     DesktopMediaID::Type type)
+diff --git a/content/browser/media/capture/desktop_capture_device.h b/content/browser/media/capture/desktop_capture_device.h
+index 6ee64c10bf75816fdf92a1da44e23cab0a50e4c9..665fec233d24dd70d53ab0ba44e1e9b8f3a3406d 100644
+--- a/content/browser/media/capture/desktop_capture_device.h
++++ b/content/browser/media/capture/desktop_capture_device.h
+@@ -39,7 +39,7 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
+   // DesktopCaptureDevice for it. May return NULL in case of a failure (e.g. if
+   // requested window was destroyed).
+   static std::unique_ptr<media::VideoCaptureDevice> Create(
+-      const DesktopMediaID& source);
++      const DesktopMediaID& source, const DesktopMediaID& mask); //+by xxlang : mask id
+ 
+   DesktopCaptureDevice(const DesktopCaptureDevice&) = delete;
+   DesktopCaptureDevice& operator=(const DesktopCaptureDevice&) = delete;
+@@ -54,6 +54,9 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
+   // Set the platform-dependent window id for the notification window.
+   void SetNotificationWindowId(gfx::NativeViewId window_id);
+ 
++  // Set the platform-dependent window id for the mask window.
++  void SetMaskWindowId(gfx::NativeViewId window_id); //+by xxlang : mask id
++
+  private:
+   friend class DesktopCaptureDeviceTest;
+   friend class DesktopCaptureDeviceThrottledTest;
+diff --git a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+index e0a5bf11ee692bbf6fb56f91d31ab43eb1b47d3e..baf82f38474ed4ecbe281aa3add56574587e0bcb 100644
+--- a/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
++++ b/content/browser/renderer_host/media/in_process_video_capture_device_launcher.cc
+@@ -503,8 +503,9 @@ void InProcessVideoCaptureDeviceLauncher::DoStartDesktopCaptureOnDeviceThread(
+       implementation = kDesktopCaptureDeviceMac;
+   }
+ #endif
++  const content::DesktopMediaID mask_id = content::DesktopMediaID::Parse(params.mask_id); //+by xxlang : mask id
+   if (!video_capture_device &&
+-      (video_capture_device = DesktopCaptureDevice::Create(desktop_id))) {
++      (video_capture_device = DesktopCaptureDevice::Create(desktop_id, mask_id))) { //+by xxlang : mask id
+     implementation = kLegacyDesktopCaptureDevice;
+   }
+ #endif
+diff --git a/media/capture/mojom/video_capture_types.mojom b/media/capture/mojom/video_capture_types.mojom
+index d9be2ad42e3c0705a0d89ec231b6c273cb2acbbe..2b0760cf59e55a523af209d281bdde7667fcd062 100644
+--- a/media/capture/mojom/video_capture_types.mojom
++++ b/media/capture/mojom/video_capture_types.mojom
+@@ -299,6 +299,7 @@ struct VideoCaptureParams {
+   ResolutionChangePolicy resolution_change_policy;
+   PowerLineFrequency power_line_frequency;
+   bool enable_face_detection;
++  string mask_id; //+by xxlang : mask id
+ };
+ 
+ [Stable, RenamedFrom="media.mojom.VideoFrameFeedback"]
+diff --git a/media/capture/mojom/video_capture_types_mojom_traits.cc b/media/capture/mojom/video_capture_types_mojom_traits.cc
+index b0abd8a14020508dd596f30c8f52433f940f2c13..aebd33688f5942a590fefa8dd48250fc549352ba 100644
+--- a/media/capture/mojom/video_capture_types_mojom_traits.cc
++++ b/media/capture/mojom/video_capture_types_mojom_traits.cc
+@@ -1811,6 +1811,10 @@ bool StructTraits<media::mojom::VideoCaptureParamsDataView,
+   if (!data.ReadPowerLineFrequency(&out->power_line_frequency))
+     return false;
+   out->enable_face_detection = data.enable_face_detection();
++  //+by xxlang : mask id {
++  if (!data.ReadMaskId(&out->mask_id))
++    return false;
++  //+by xxlang : mask id }
+   return true;
+ }
+ 
+diff --git a/media/capture/mojom/video_capture_types_mojom_traits.h b/media/capture/mojom/video_capture_types_mojom_traits.h
+index d6cad61f9c088c20ab66bb897919e4cb15fc2117..9f312ebc1a8fb333dd03bcee58d9873d87f6dbf5 100644
+--- a/media/capture/mojom/video_capture_types_mojom_traits.h
++++ b/media/capture/mojom/video_capture_types_mojom_traits.h
+@@ -172,6 +172,13 @@ struct COMPONENT_EXPORT(MEDIA_CAPTURE_MOJOM_TRAITS)
+     return params.enable_face_detection;
+   }
+ 
++  //+by xxlang : mask id {
++  static const std::string& mask_id(
++      const media::VideoCaptureParams& params) {
++    return params.mask_id;
++  }
++  //+by xxlang : mask id }
++
+   static bool Read(media::mojom::VideoCaptureParamsDataView data,
+                    media::VideoCaptureParams* out);
+ };
+diff --git a/media/capture/video_capture_types.h b/media/capture/video_capture_types.h
+index a485ec3f05aeab0479b887a348be9dd980d457de..c83a74a3ce058016ef7e92a8ecb587892be3b68c 100644
+--- a/media/capture/video_capture_types.h
++++ b/media/capture/video_capture_types.h
+@@ -327,6 +327,8 @@ struct CAPTURE_EXPORT VideoCaptureParams {
+   // exposures around the face area. Currently only applicable on
+   // Android platform with Camera2 driver support.
+   bool enable_face_detection;
++
++  std::string mask_id; //+by xxlang : mask id
+ };
+ 
+ }  // namespace media
+diff --git a/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom b/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
+index eadcffd7b28a51c7a7cfa535d5b48313f9cb9cc1..180bb73f7ccd01c34717580cae97b7542a39a69d 100644
+--- a/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
++++ b/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
+@@ -3657,6 +3657,9 @@ enum WebFeature {
+   //+by xxlang@2022-12-08
+   kMediaStreamConstraintsGoogRnnNoiseSuppression = 4336,
+ 
++  //+by xxlang : mask id
++  kMediaStreamConstraintsMaskIdVideo = 4337,
++
+   // Add new features immediately above this line. Don't change assigned
+   // numbers of any item, and don't reuse removed slots.
+   // Also, run update_use_counter_feature_enum.py in
+diff --git a/third_party/blink/renderer/modules/mediastream/media_constraints_impl.cc b/third_party/blink/renderer/modules/mediastream/media_constraints_impl.cc
+index c3f5a27c16fa5a76815e44221c3560fb2b7adee6..50a32246387d6d574005dd1099268ba1b3380129 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_constraints_impl.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_constraints_impl.cc
+@@ -93,6 +93,8 @@ const char kMediaStreamSource[] = "chromeMediaSource";
+ const char kMediaStreamSourceId[] =
+     "chromeMediaSourceId";                           // mapped to deviceId
+ const char kMediaStreamSourceInfoId[] = "sourceId";  // mapped to deviceId
++const char kMediaStreamMaskId[] =
++    "chromeMediaMaskId";                             //+by xxlang : mapped to maskId
+ const char kMediaStreamRenderToAssociatedSink[] =
+     "chromeRenderToAssociatedSink";
+ // RenderToAssociatedSink will be going away some time.
+@@ -276,6 +278,8 @@ static void ParseOldStyleNames(
+     } else if (constraint.name_.Equals(kMediaStreamSourceId) ||
+                constraint.name_.Equals(kMediaStreamSourceInfoId)) {
+       result.device_id.SetExact(constraint.value_);
++    } else if (constraint.name_.Equals(kMediaStreamMaskId)) { //+by xxlang : mask id
++      result.mask_id.SetExact(constraint.value_);
+     } else if (constraint.name_.Equals(kMediaStreamRenderToAssociatedSink)) {
+       // TODO(hta): This is a boolean represented as string.
+       // Should give TypeError when it's not parseable.
+@@ -689,6 +693,14 @@ bool ValidateAndCopyConstraintSet(
+       return false;
+     }
+   }
++  if (constraints_in->hasMaskId()) { //+by xxlang : mask id
++    if (!ValidateAndCopyStringConstraint(
++            constraints_in->maskId(), naked_treatment,
++            constraint_buffer.mask_id, error_state)) {
++      DCHECK(error_state.HadException());
++      return false;
++    }
++  }
+   if (constraints_in->hasGroupId()) {
+     if (!ValidateAndCopyStringConstraint(
+             constraints_in->groupId(), naked_treatment,
+@@ -978,6 +990,8 @@ void ConvertConstraintSet(const MediaTrackConstraintSetPlatform& input,
+     output->setChannelCount(ConvertLong(input.channel_count, naked_treatment));
+   if (!input.device_id.IsUnconstrained())
+     output->setDeviceId(ConvertString(input.device_id, naked_treatment));
++  if (!input.mask_id.IsUnconstrained()) //+by xxlang : mask id
++    output->setMaskId(ConvertString(input.mask_id, naked_treatment));
+   if (!input.group_id.IsUnconstrained())
+     output->setGroupId(ConvertString(input.group_id, naked_treatment));
+   if (!input.pan.IsUnconstrained())
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.cc b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.cc
+index 536a55d7127850656058f4008588559248fc668d..184106d73357f97b45567ca1b0330235bbc361a0 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.cc
+@@ -285,9 +285,15 @@ MediaStreamSource::Capabilities ComputeCapabilitiesForVideoSource(
+     const media::VideoCaptureFormats& formats,
+     mojom::blink::FacingMode facing_mode,
+     bool is_device_capture,
++    const absl::optional<std::string>& mask_id, //+by xxlang : mask id
+     const absl::optional<std::string>& group_id) {
+   MediaStreamSource::Capabilities capabilities;
+   capabilities.device_id = std::move(device_id);
++  //+by xxlang : mask id {
++  if (mask_id) {
++    capabilities.mask_id = String::FromUTF8(*mask_id);
++  }
++  //+by xxlang : mask id }
+   if (is_device_capture) {
+     capabilities.facing_mode = ToPlatformFacingMode(facing_mode);
+     if (group_id)
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h
+index 3f80b0dc10fbc0e51f9f57f18521afa728bc1714..aeefacaf89d00f6e39e8c25c1fd701c4298229da 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util.h
+@@ -349,6 +349,7 @@ ComputeCapabilitiesForVideoSource(
+     const media::VideoCaptureFormats& formats,
+     mojom::blink::FacingMode facing_mode,
+     bool is_device_capture,
++    const absl::optional<std::string>& mask_id = absl::nullopt, //+by xxlang : mask id
+     const absl::optional<std::string>& group_id = absl::nullopt);
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util_video_content.cc b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util_video_content.cc
+index 5118de3aeb1396e504f89745a6bcd449137f38a4..3233e64bc830d2c5e688cbcc8d17dc69ff1547b5 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util_video_content.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_constraints_util_video_content.cc
+@@ -73,6 +73,8 @@ class VideoContentCaptureCandidates {
+                                            kMaxScreenCastFrameRate)),
+         device_id_set_(media_constraints::StringSetFromConstraint(
+             constraint_set.device_id)),
++        mask_id_set_(media_constraints::StringSetFromConstraint(
++            constraint_set.mask_id)), //+by xxlang : mask id
+         noise_reduction_set_(media_constraints::BoolSetFromConstraint(
+             constraint_set.goog_noise_reduction)),
+         rescale_set_(media_constraints::RescaleSetFromConstraint(
+@@ -102,6 +104,8 @@ class VideoContentCaptureCandidates {
+         frame_rate_set_.Intersection(other.frame_rate_set_);
+     intersection.device_id_set_ =
+         device_id_set_.Intersection(other.device_id_set_);
++    intersection.mask_id_set_ =
++        mask_id_set_.Intersection(other.mask_id_set_); //+by xxlang : mask id
+     intersection.noise_reduction_set_ =
+         noise_reduction_set_.Intersection(other.noise_reduction_set_);
+     intersection.rescale_set_ = rescale_set_.Intersection(other.rescale_set_);
+@@ -113,6 +117,7 @@ class VideoContentCaptureCandidates {
+   bool has_explicit_max_width() const { return has_explicit_max_width_; }
+   const DoubleRangeSet& frame_rate_set() const { return frame_rate_set_; }
+   const StringSet& device_id_set() const { return device_id_set_; }
++  const StringSet& mask_id_set() const { return mask_id_set_; } //+by xxlang : mask id
+   const BoolSet& noise_reduction_set() const { return noise_reduction_set_; }
+   const BoolSet& rescale_set() const { return rescale_set_; }
+   void set_resolution_set(const ResolutionSet& set) { resolution_set_ = set; }
+@@ -124,6 +129,7 @@ class VideoContentCaptureCandidates {
+   bool has_explicit_max_width_;
+   DoubleRangeSet frame_rate_set_;
+   StringSet device_id_set_;
++  StringSet mask_id_set_; //+by xxlang : mask id
+   BoolSet noise_reduction_set_;
+   BoolSet rescale_set_;
+ };
+@@ -189,6 +195,33 @@ double SelectFrameRateFromCandidates(
+   return frame_rate;
+ }
+ 
++//+by xxlang : mask id
++std::string SelectMaskIDFromCandidates(
++    const StringSet& candidates,
++    const MediaTrackConstraintSetPlatform& basic_constraint_set) {
++  DCHECK(!candidates.IsEmpty());
++  if (basic_constraint_set.mask_id.HasIdeal()) {
++    // If there are multiple elements specified by ideal, break ties by choosing
++    // the first one that satisfies the constraints.
++    for (const auto& ideal_entry : basic_constraint_set.mask_id.Ideal()) {
++      std::string ideal_value = ideal_entry.Ascii();
++      if (candidates.Contains(ideal_value)) {
++        return ideal_value;
++      }
++    }
++  }
++
++  // Return the empty string if nothing is specified in the constraints.
++  // The empty string is treated as a no mask ID by the browser.
++  if (candidates.is_universal()) {
++    return std::string();
++  }
++
++  // If there are multiple elements that satisfy the constraints, break ties by
++  // using the element that was specified first.
++  return candidates.FirstElement();
++}
++
+ media::VideoCaptureParams SelectVideoCaptureParamsFromCandidates(
+     const VideoContentCaptureCandidates& candidates,
+     const MediaTrackConstraintSetPlatform& basic_constraint_set,
+@@ -212,6 +245,7 @@ media::VideoCaptureParams SelectVideoCaptureParamsFromCandidates(
+   params.resolution_change_policy = SelectResolutionPolicyFromCandidates(
+       candidates.resolution_set(), default_resolution_policy);
+   // Content capture always uses default power-line frequency.
++  params.mask_id = SelectMaskIDFromCandidates(candidates.mask_id_set(), basic_constraint_set); //+by xxlang : mask id
+   DCHECK(params.IsValid());
+ 
+   return params;
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc b/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
+index f1b516bf67599743b2ed67f0bc213cf82ace7629..b5e47aec04bda81cd43b6187f7bb7cc119dbd072 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
+@@ -516,6 +516,8 @@ MediaTrackCapabilities* MediaStreamTrackImpl::getCapabilities() const {
+   }
+ 
+   if (component_->GetSourceType() == MediaStreamSource::kTypeVideo) {
++    if (!platform_capabilities.mask_id.IsNull()) //+by xxlang : mask id
++      capabilities->setMaskId(platform_capabilities.mask_id);
+     if (platform_capabilities.width.size() == 2) {
+       LongRange* width = LongRange::Create();
+       width->setMin(platform_capabilities.width[0]);
+@@ -597,6 +599,8 @@ MediaTrackSettings* MediaStreamTrackImpl::getSettings() const {
+   if (platform_settings.HasAspectRatio())
+     settings->setAspectRatio(platform_settings.aspect_ratio);
+   settings->setDeviceId(platform_settings.device_id);
++  if (!platform_settings.mask_id.IsNull()) //+by xxlang : mask id
++    settings->setMaskId(platform_settings.mask_id);
+   if (!platform_settings.group_id.IsNull())
+     settings->setGroupId(platform_settings.group_id);
+   if (platform_settings.HasFacingMode()) {
+diff --git a/third_party/blink/renderer/modules/mediastream/media_track_capabilities.idl b/third_party/blink/renderer/modules/mediastream/media_track_capabilities.idl
+index 2d968357663317f897decf1d5bbbac8cdede032b..f4cb189d2fe204c6e473f63acaa74868fb651b26 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_track_capabilities.idl
++++ b/third_party/blink/renderer/modules/mediastream/media_track_capabilities.idl
+@@ -18,6 +18,7 @@ dictionary MediaTrackCapabilities {
+     LongRange sampleRate;
+     DoubleRange latency;
+     DOMString deviceId;
++    DOMString maskId; //+by xxlang : mask id
+     DOMString groupId;
+     // W3C Image Capture API
+     // https://w3c.github.io/mediacapture-image/#mediatrackcapabilities-section
+diff --git a/third_party/blink/renderer/modules/mediastream/media_track_constraint_set.idl b/third_party/blink/renderer/modules/mediastream/media_track_constraint_set.idl
+index aebb71658d074c1537f9f3befa898b045b7c74ad..0d9162de841d97357f8fb75ac51a0cbe8b2ff3d7 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_track_constraint_set.idl
++++ b/third_party/blink/renderer/modules/mediastream/media_track_constraint_set.idl
+@@ -26,6 +26,7 @@ dictionary MediaTrackConstraintSet {
+     ConstrainDouble latency;
+     ConstrainLong channelCount;
+     ConstrainDOMString deviceId;
++    ConstrainDOMString maskId; //+by xxlang : mask id
+     ConstrainDOMString groupId;
+     // W3C Image Capture API
+     // https://w3c.github.io/mediacapture-image/#mediatrackconstraintset-section
+diff --git a/third_party/blink/renderer/modules/mediastream/media_track_settings.idl b/third_party/blink/renderer/modules/mediastream/media_track_settings.idl
+index 0fc4265942cb64738681944ab1177708b68f8ec1..e37d0ef7f087bebb42f53dfc2da97a2fc2323708 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_track_settings.idl
++++ b/third_party/blink/renderer/modules/mediastream/media_track_settings.idl
+@@ -20,6 +20,7 @@ dictionary MediaTrackSettings {
+     double latency;
+     long channelCount;
+     DOMString deviceId;
++    DOMString maskId; //+by xxlang : mask id
+     DOMString groupId;
+ 
+     // W3C Image Capture API
+diff --git a/third_party/blink/renderer/modules/mediastream/media_track_supported_constraints.idl b/third_party/blink/renderer/modules/mediastream/media_track_supported_constraints.idl
+index d13510aba69659c5d8eec2d461a35794985bc428..cdd711b0f22b4a766a82f466ed6f1c35128b8827 100644
+--- a/third_party/blink/renderer/modules/mediastream/media_track_supported_constraints.idl
++++ b/third_party/blink/renderer/modules/mediastream/media_track_supported_constraints.idl
+@@ -23,6 +23,7 @@ dictionary MediaTrackSupportedConstraints {
+     boolean latency = true;
+     boolean channelCount = true;
+     boolean deviceId = true;
++    boolean maskId = true; //+by xxlang : mask id
+     boolean groupId = true;
+ 
+     // W3C Image Capture API
+diff --git a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+index 818c7d2ba5c9266e7664c45657ac2f781ee6226a..030f4ae0b3eed6cdde8c6b4703ec122a99e36eb7 100644
+--- a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
++++ b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+@@ -1426,7 +1426,9 @@ MediaStreamSource* UserMediaProcessor::InitializeVideoSourceObject(
+       String::FromUTF8(device.id),
+       ToStdVector(*current_request_info_->GetNativeVideoFormats(device_id)),
+       static_cast<mojom::blink::FacingMode>(device.video_facing),
+-      current_request_info_->is_video_device_capture(), device.group_id));
++      current_request_info_->is_video_device_capture(),
++      absl::optional<std::string>("window:0:0"), //+by xxlang : mask id
++      device.group_id));
+   local_sources_.push_back(source);
+   return source;
+ }
+@@ -1644,6 +1646,11 @@ MediaStreamComponent* UserMediaProcessor::CreateVideoTrack(
+   MediaStreamSource* source = InitializeVideoSourceObject(*device);
+   MediaStreamComponent* component =
+       current_request_info_->CreateAndStartVideoTrack(source);
++  //+by xxlang : mask id {
++  if (!current_request_info_->video_capture_settings().capture_params().mask_id.empty()) {
++    source->SetMaskId(String::FromUTF8(current_request_info_->video_capture_settings().capture_params().mask_id));
++  }
++  //+by xxlang : mask id }
+   if (current_request_info_->request()->IsTransferredTrackRequest()) {
+     current_request_info_->request()->SetTransferredTrackComponent(component);
+   }
+diff --git a/third_party/blink/renderer/modules/mediastream/user_media_request.cc b/third_party/blink/renderer/modules/mediastream/user_media_request.cc
+index 447730ba10a4f18ab1cb71b3285339a1e6de72b6..1075c514f3035d5886dd173ab5763e7874fa4903 100644
+--- a/third_party/blink/renderer/modules/mediastream/user_media_request.cc
++++ b/third_party/blink/renderer/modules/mediastream/user_media_request.cc
+@@ -265,6 +265,10 @@ void CountVideoConstraintUses(ExecutionContext* context,
+           constraints, &MediaTrackConstraintSetPlatform::device_id)) {
+     counter.Count(WebFeature::kMediaStreamConstraintsDeviceIdVideo);
+   }
++  if (RequestUsesDiscreteConstraint( //+by xxlang : mask id
++          constraints, &MediaTrackConstraintSetPlatform::mask_id)) {
++    counter.Count(WebFeature::kMediaStreamConstraintsMaskIdVideo);
++  }
+   if (RequestUsesDiscreteConstraint(
+           constraints, &MediaTrackConstraintSetPlatform::group_id)) {
+     counter.Count(WebFeature::kMediaStreamConstraintsGroupIdVideo);
+diff --git a/third_party/blink/renderer/platform/mediastream/media_constraints.cc b/third_party/blink/renderer/platform/mediastream/media_constraints.cc
+index b542e8eddf9ad22c7bbdba112d119683c13cf403..5e23472dd4b30eca667130f2fe93c23611d4c3ac 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_constraints.cc
++++ b/third_party/blink/renderer/platform/mediastream/media_constraints.cc
+@@ -349,6 +349,7 @@ MediaTrackConstraintSetPlatform::MediaTrackConstraintSetPlatform()
+       latency("latency"),
+       channel_count("channelCount"),
+       device_id("deviceId"),
++      mask_id("maskId"), //+by xxlang : mask id
+       disable_local_echo("disableLocalEcho"),
+       pan("pan"),
+       tilt("tilt"),
+@@ -384,6 +385,7 @@ Vector<const BaseConstraint*> MediaTrackConstraintSetPlatform::AllConstraints()
+           &latency,
+           &channel_count,
+           &device_id,
++          &mask_id, //+by xxlang : mask id
+           &group_id,
+           &media_stream_source,
+           &disable_local_echo,
+diff --git a/third_party/blink/renderer/platform/mediastream/media_constraints.h b/third_party/blink/renderer/platform/mediastream/media_constraints.h
+index c9d0962120df50c0ff7435b374415f45cdca7282..d51b0597d42bbf80706685a5d51709e35cc27d37 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_constraints.h
++++ b/third_party/blink/renderer/platform/mediastream/media_constraints.h
+@@ -243,6 +243,7 @@ struct MediaTrackConstraintSetPlatform {
+   DoubleConstraint latency;
+   LongConstraint channel_count;
+   StringConstraint device_id;
++  StringConstraint mask_id; //+by xxlang : mask id
+   BooleanConstraint disable_local_echo;
+   DoubleConstraint pan;
+   DoubleConstraint tilt;
+diff --git a/third_party/blink/renderer/platform/mediastream/media_stream_source.cc b/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
+index d0f8d816b117b5890ebee667b45410fe1fc81edc..a1443df619854455d0225dbf948ed29f810c67c9 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
++++ b/third_party/blink/renderer/platform/mediastream/media_stream_source.cc
+@@ -177,6 +177,14 @@ MediaStreamSource::MediaStreamSource(
+   platform_source_->SetOwner(this);
+ }
+ 
++//+by xxlang : mask id
++void MediaStreamSource::SetMaskId(const String& mask_id) {
++  SendLogMessage(
++      String::Format("SetMaskId({mask_id=%s})", mask_id.Utf8().c_str())
++          .Utf8());
++  mask_id_ = mask_id;
++}
++
+ void MediaStreamSource::SetGroupId(const String& group_id) {
+   SendLogMessage(
+       String::Format("SetGroupId({group_id=%s})", group_id.Utf8().c_str())
+@@ -251,6 +259,7 @@ bool MediaStreamSource::RemoveAudioConsumer() {
+ void MediaStreamSource::GetSettings(
+     MediaStreamTrackPlatform::Settings& settings) {
+   settings.device_id = Id();
++  settings.mask_id = MaskId(); //+by xxlang : mask id
+   settings.group_id = GroupId();
+ 
+   if (echo_cancellation_mode_) {
+diff --git a/third_party/blink/renderer/platform/mediastream/media_stream_source.h b/third_party/blink/renderer/platform/mediastream/media_stream_source.h
+index 1b38a7bcf97c0b8c25c470bbb4b864e806d20959..be63515f52de3697e93b42e3a1539124c70cf7d7 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_stream_source.h
++++ b/third_party/blink/renderer/platform/mediastream/media_stream_source.h
+@@ -103,6 +103,9 @@ class PLATFORM_EXPORT MediaStreamSource final
+   const String& GetName() const { return name_; }
+   bool Remote() const { return remote_; }
+ 
++  void SetMaskId(const String& mask_id); //+by xxlang : mask id
++  const String& MaskId() { return mask_id_; } //+by xxlang : mask id
++
+   void SetGroupId(const String& group_id);
+   const String& GroupId() { return group_id_; }
+ 
+@@ -142,6 +145,7 @@ class PLATFORM_EXPORT MediaStreamSource final
+     MediaStreamTrackPlatform::FacingMode facing_mode =
+         MediaStreamTrackPlatform::FacingMode::kNone;
+     String device_id;
++    String mask_id; //+by xxlang : mask id
+     String group_id;
+   };
+ 
+@@ -187,6 +191,7 @@ class PLATFORM_EXPORT MediaStreamSource final
+   String id_;
+   StreamType type_;
+   String name_;
++  String mask_id_; //+by xxlang : mask id
+   String group_id_;
+   bool remote_;
+   ReadyState ready_state_;
+diff --git a/third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h b/third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h
+index 885a0985785d713a4fec64d52587d403cc683352..36d7332442f7de9ba25454611e172fe3a4df24d3 100644
+--- a/third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h
++++ b/third_party/blink/renderer/platform/mediastream/media_stream_track_platform.h
+@@ -38,6 +38,7 @@ class PLATFORM_EXPORT MediaStreamTrackPlatform {
+     int32_t height = -1;
+     double aspect_ratio = -1.0;
+     String device_id;
++    String mask_id; //+by xxlang : mask id
+     String group_id;
+     FacingMode facing_mode = FacingMode::kNone;
+     String resize_mode;
+diff --git a/third_party/blink/web_tests/external/wpt/interfaces/mediacapture-streams.idl b/third_party/blink/web_tests/external/wpt/interfaces/mediacapture-streams.idl
+index 19e78ff5d5f95235e47e0271c64ac1464413e3a3..722045e24eb7d9efec5c22e5d6c2ecac037e9397 100644
+--- a/third_party/blink/web_tests/external/wpt/interfaces/mediacapture-streams.idl
++++ b/third_party/blink/web_tests/external/wpt/interfaces/mediacapture-streams.idl
+@@ -61,6 +61,7 @@ dictionary MediaTrackSupportedConstraints {
+   boolean latency = true;
+   boolean channelCount = true;
+   boolean deviceId = true;
++  boolean maskId = true; //+by xxlang : mask id
+   boolean groupId = true;
+ };
+ 
+@@ -80,6 +81,7 @@ dictionary MediaTrackCapabilities {
+   DoubleRange latency;
+   ULongRange channelCount;
+   DOMString deviceId;
++  DOMString maskId; //+by xxlang : mask id
+   DOMString groupId;
+ };
+ 
+@@ -103,6 +105,7 @@ dictionary MediaTrackConstraintSet {
+   ConstrainDouble latency;
+   ConstrainULong channelCount;
+   ConstrainDOMString deviceId;
++  ConstrainDOMString maskId; //+by xxlang : mask id
+   ConstrainDOMString groupId;
+ };
+ 
+@@ -122,6 +125,7 @@ dictionary MediaTrackSettings {
+   double latency;
+   long channelCount;
+   DOMString deviceId;
++  DOMString maskId; //+by xxlang : mask id
+   DOMString groupId;
+ };
+ 

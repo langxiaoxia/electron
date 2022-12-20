@@ -1,0 +1,516 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 20 Dec 2022 15:04:21 +0800
+Subject: feat: add mask for window capture.
+
+Composite mask with source, move and resize mask with source.
+
+diff --git a/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.cc b/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.cc
+index 23ffd3ce73105f5b07694dbdfad1d1e52f8d9a1f..99a6fea8a559f82dba7ce35263cdf196bd159e2f 100644
+--- a/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.cc
++++ b/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.cc
+@@ -50,6 +50,12 @@ void BlankDetectorDesktopCapturerWrapper::CaptureFrame() {
+   capturer_->CaptureFrame();
+ }
+ 
++//+by xxlang : window mask {
++void BlankDetectorDesktopCapturerWrapper::SetMaskWindow(WindowId window) {
++  capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void BlankDetectorDesktopCapturerWrapper::SetExcludedWindow(WindowId window) {
+   capturer_->SetExcludedWindow(window);
+ }
+diff --git a/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.h b/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.h
+index 6c49f0f8514e0882d7032071dd41979623bf5258..51b797ed198421c6f26c2a76a68d8c4d2931a76b 100644
+--- a/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.h
++++ b/modules/desktop_capture/blank_detector_desktop_capturer_wrapper.h
+@@ -43,6 +43,7 @@ class BlankDetectorDesktopCapturerWrapper final
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+diff --git a/modules/desktop_capture/cropping_window_capturer.cc b/modules/desktop_capture/cropping_window_capturer.cc
+index 6671592d5c735d70bccd5e1d71919219b9256546..f18abb714e9bdd4b2fa349a495ed6efc711370dc 100644
+--- a/modules/desktop_capture/cropping_window_capturer.cc
++++ b/modules/desktop_capture/cropping_window_capturer.cc
+@@ -26,6 +26,7 @@ CroppingWindowCapturer::CroppingWindowCapturer(
+       callback_(NULL),
+       selected_window_(kNullWindowId),
+       excluded_window_(kNullWindowId),
++      mask_window_(kNullWindowId), //+by xxlang : window mask
+       last_capturer_(0), //+by xxlang
+       enable_border_(options.enable_border()), //+by xxlang : window border
+       first_capture_(true), //+by xxlang : window border
+@@ -56,11 +57,12 @@ void CroppingWindowCapturer::CaptureFrame() {
+     if (first_capture_) {
+       first_capture_ = false;
+     } else {
+-      RTC_LOG(LS_INFO) << "CroppingWindowCapturer create border for window " << selected_window_;
++      RTC_LOG(LS_INFO) << "CroppingWindowCapturer create border for window " << selected_window_ << " with mask " << mask_window_;
+       window_border_->CreateForWindow(selected_window_);
+       if (window_border_->IsCreated()) {
+         RTC_LOG(LS_INFO) << "CroppingWindowCapturer exclude border window";
+         SetExcludedWindow(window_border_->GetBorderId());
++        window_border_->SetMaskId(mask_window_);
+       }
+     }
+   }
+@@ -90,6 +92,13 @@ void CroppingWindowCapturer::CaptureFrame() {
+   }
+ }
+ 
++//+by xxlang : window mask {
++void CroppingWindowCapturer::SetMaskWindow(WindowId window) {
++  mask_window_ = window;
++  window_capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void CroppingWindowCapturer::SetExcludedWindow(WindowId window) {
+   RTC_LOG(LS_INFO) << "CroppingWindowCapturer::SetExcludedWindow " << excluded_window_ << " => " << window;
+   excluded_window_ = window;
+diff --git a/modules/desktop_capture/cropping_window_capturer.h b/modules/desktop_capture/cropping_window_capturer.h
+index 1481889a2e60d1d1687c0f3815f8dda4ea99174c..ea2a87c2008689766dfd9c896799354058a9c3e3 100644
+--- a/modules/desktop_capture/cropping_window_capturer.h
++++ b/modules/desktop_capture/cropping_window_capturer.h
+@@ -40,6 +40,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+@@ -80,6 +81,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
+   std::unique_ptr<DesktopCapturer> screen_capturer_;
+   SourceId selected_window_;
+   WindowId excluded_window_;
++  WindowId mask_window_; //+by xxlang : window mask
+   int last_capturer_; //+by xxlang : 0 - none, 1 - screen, 2 - window.
+ 
+   //+by xxlang : window border {
+diff --git a/modules/desktop_capture/desktop_and_cursor_composer.cc b/modules/desktop_capture/desktop_and_cursor_composer.cc
+index dd688ac5f2d72dcf08d73340c07248780e5a2f13..0028187552a1d5255479274f7cedd102556aba54 100644
+--- a/modules/desktop_capture/desktop_and_cursor_composer.cc
++++ b/modules/desktop_capture/desktop_and_cursor_composer.cc
+@@ -188,6 +188,12 @@ void DesktopAndCursorComposer::CaptureFrame() {
+   desktop_capturer_->CaptureFrame();
+ }
+ 
++//+by xxlang : window mask {
++void DesktopAndCursorComposer::SetMaskWindow(WindowId window) {
++  desktop_capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void DesktopAndCursorComposer::SetExcludedWindow(WindowId window) {
+   desktop_capturer_->SetExcludedWindow(window);
+ }
+diff --git a/modules/desktop_capture/desktop_and_cursor_composer.h b/modules/desktop_capture/desktop_and_cursor_composer.h
+index a078b3eeef297e59a1bcbdd744e905d5fccf6e35..7cd2e99b7de77c16a21f88751c4f2cf237ce8726 100644
+--- a/modules/desktop_capture/desktop_and_cursor_composer.h
++++ b/modules/desktop_capture/desktop_and_cursor_composer.h
+@@ -56,6 +56,7 @@ class RTC_EXPORT DesktopAndCursorComposer
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+diff --git a/modules/desktop_capture/desktop_capturer.cc b/modules/desktop_capture/desktop_capturer.cc
+index fc68220130cd8274c0d16f38a29f164ebbdd4d07..5245e78597582ae7e742c7aab47e4a449a66f67d 100644
+--- a/modules/desktop_capture/desktop_capturer.cc
++++ b/modules/desktop_capture/desktop_capturer.cc
+@@ -33,6 +33,8 @@ DesktopCapturer::~DesktopCapturer() = default;
+ void DesktopCapturer::SetSharedMemoryFactory(
+     std::unique_ptr<SharedMemoryFactory> shared_memory_factory) {}
+ 
++void DesktopCapturer::SetMaskWindow(WindowId window) {} //+by xxlang : window mask
++
+ void DesktopCapturer::SetExcludedWindow(WindowId window) {}
+ 
+ bool DesktopCapturer::GetSourceList(SourceList* sources) {
+diff --git a/modules/desktop_capture/desktop_capturer.h b/modules/desktop_capture/desktop_capturer.h
+index 4870f5d514eaf4a4c505141a0225c422a9f575d1..ce000b1364db1e45e621c5cda6bf0c85dbb61bce 100644
+--- a/modules/desktop_capture/desktop_capturer.h
++++ b/modules/desktop_capture/desktop_capturer.h
+@@ -101,6 +101,8 @@ class RTC_EXPORT DesktopCapturer {
+   // Pending capture requests are canceled when DesktopCapturer is deleted.
+   virtual void CaptureFrame() = 0;
+ 
++  virtual void SetMaskWindow(WindowId window); //+by xxlang : window mask
++
+   // Sets the window to be excluded from the captured image in the future
+   // Capture calls. Used to exclude the screenshare notification window for
+   // screen capturing.
+diff --git a/modules/desktop_capture/desktop_capturer_differ_wrapper.cc b/modules/desktop_capture/desktop_capturer_differ_wrapper.cc
+index 77543e4060e781ace17a14a9d3d004cbd38b6f61..11347ee9277c014ddff075456bf03bc75e417cea 100644
+--- a/modules/desktop_capture/desktop_capturer_differ_wrapper.cc
++++ b/modules/desktop_capture/desktop_capturer_differ_wrapper.cc
+@@ -166,6 +166,12 @@ void DesktopCapturerDifferWrapper::CaptureFrame() {
+   base_capturer_->CaptureFrame();
+ }
+ 
++//+by xxlang : window mask {
++void DesktopCapturerDifferWrapper::SetMaskWindow(WindowId window) {
++  base_capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void DesktopCapturerDifferWrapper::SetExcludedWindow(WindowId window) {
+   base_capturer_->SetExcludedWindow(window);
+ }
+diff --git a/modules/desktop_capture/desktop_capturer_differ_wrapper.h b/modules/desktop_capture/desktop_capturer_differ_wrapper.h
+index 6ebb5d7bc322fce439b5004187612c281d4609e6..b78dc3299042faacffc38d11a3777542c9f85bdf 100644
+--- a/modules/desktop_capture/desktop_capturer_differ_wrapper.h
++++ b/modules/desktop_capture/desktop_capturer_differ_wrapper.h
+@@ -49,6 +49,7 @@ class RTC_EXPORT DesktopCapturerDifferWrapper
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* screens) override;
+   bool SelectSource(SourceId id) override;
+diff --git a/modules/desktop_capture/desktop_capturer_wrapper.cc b/modules/desktop_capture/desktop_capturer_wrapper.cc
+index 4bbdd6c94f1bcf6a36621ba42ff9630a60e152ca..f98c1b8053959477c9d5dc37a189641bcaa11323 100644
+--- a/modules/desktop_capture/desktop_capturer_wrapper.cc
++++ b/modules/desktop_capture/desktop_capturer_wrapper.cc
+@@ -37,6 +37,12 @@ void DesktopCapturerWrapper::CaptureFrame() {
+   base_capturer_->CaptureFrame();
+ }
+ 
++//+by xxlang : window mask {
++void DesktopCapturerWrapper::SetMaskWindow(WindowId window) {
++  base_capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void DesktopCapturerWrapper::SetExcludedWindow(WindowId window) {
+   base_capturer_->SetExcludedWindow(window);
+ }
+diff --git a/modules/desktop_capture/desktop_capturer_wrapper.h b/modules/desktop_capture/desktop_capturer_wrapper.h
+index e0f50d79e1dcdd5ef752477e92ec26fe506f6eed..93a71551d66e837ea38c729ce0c7c72eb00d58d9 100644
+--- a/modules/desktop_capture/desktop_capturer_wrapper.h
++++ b/modules/desktop_capture/desktop_capturer_wrapper.h
+@@ -32,6 +32,7 @@ class DesktopCapturerWrapper : public DesktopCapturer {
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+diff --git a/modules/desktop_capture/desktop_frame.cc b/modules/desktop_capture/desktop_frame.cc
+index 837cbfca893f968f1b960d176468e37c405b9723..fffd3fa284ed3f10c363aa6d9a1060b0af53427d 100644
+--- a/modules/desktop_capture/desktop_frame.cc
++++ b/modules/desktop_capture/desktop_frame.cc
+@@ -41,28 +41,35 @@ DesktopFrame::~DesktopFrame() = default;
+ 
+ void DesktopFrame::CopyPixelsFrom(const uint8_t* src_buffer,
+                                   int src_stride,
+-                                  const DesktopRect& dest_rect) {
++                                  const DesktopRect& dest_rect,
++                                  bool with_alpha) {
+   RTC_CHECK(DesktopRect::MakeSize(size()).ContainsRect(dest_rect));
+ 
+   uint8_t* dest = GetFrameDataAtPos(dest_rect.top_left());
+   // TODO(crbug.com/1330019): Temporary workaround for a known libyuv crash when
+   // the height or width is 0. Remove this once this change has been merged.
+   if (dest_rect.width() && dest_rect.height()) {
+-    libyuv::CopyPlane(src_buffer, src_stride, dest, stride(),
++    if (with_alpha) //+by xxlang : window mask
++      libyuv::CopyPlaneWithAlpha(src_buffer, src_stride, dest, stride(),
+                       DesktopFrame::kBytesPerPixel * dest_rect.width(),
+                       dest_rect.height());
++    else
++      libyuv::CopyPlane(src_buffer, src_stride, dest, stride(),
++                        DesktopFrame::kBytesPerPixel * dest_rect.width(),
++                        dest_rect.height());
+   }
+ }
+ 
+ void DesktopFrame::CopyPixelsFrom(const DesktopFrame& src_frame,
+                                   const DesktopVector& src_pos,
+-                                  const DesktopRect& dest_rect) {
++                                  const DesktopRect& dest_rect,
++                                  bool with_alpha) {
+   RTC_CHECK(DesktopRect::MakeSize(src_frame.size())
+                 .ContainsRect(
+                     DesktopRect::MakeOriginSize(src_pos, dest_rect.size())));
+ 
+   CopyPixelsFrom(src_frame.GetFrameDataAtPos(src_pos), src_frame.stride(),
+-                 dest_rect);
++                 dest_rect, with_alpha); //+by xxlang : window mask
+ }
+ 
+ bool DesktopFrame::CopyIntersectingPixelsFrom(const DesktopFrame& src_frame,
+@@ -102,7 +109,7 @@ bool DesktopFrame::CopyIntersectingPixelsFrom(const DesktopFrame& src_frame,
+   int32_t src_pos_y = std::max(0, -src_frame_offset.y());
+ 
+   CopyPixelsFrom(src_frame, DesktopVector(src_pos_x, src_pos_y),
+-                 intersection_rect);
++                 intersection_rect, true); //+by xxlang : window mask
+   return true;
+ }
+ 
+diff --git a/modules/desktop_capture/desktop_frame.h b/modules/desktop_capture/desktop_frame.h
+index 3ee1867e70dd8802a1fa89b10fb543c5acb938c2..e5948a4c3f7ace59baef952070aab8e0ff52e90d 100644
+--- a/modules/desktop_capture/desktop_frame.h
++++ b/modules/desktop_capture/desktop_frame.h
+@@ -91,10 +91,12 @@ class RTC_EXPORT DesktopFrame {
+   // within bounds of this frame.
+   void CopyPixelsFrom(const uint8_t* src_buffer,
+                       int src_stride,
+-                      const DesktopRect& dest_rect);
++                      const DesktopRect& dest_rect,
++                      bool with_alpha = false); //+by xxlang : window mask
+   void CopyPixelsFrom(const DesktopFrame& src_frame,
+                       const DesktopVector& src_pos,
+-                      const DesktopRect& dest_rect);
++                      const DesktopRect& dest_rect,
++                      bool with_alpha = false); //+by xxlang : window mask
+ 
+   // Copies pixels from another frame, with the copied & overwritten regions
+   // representing the intersection between the two frames. Returns true if
+diff --git a/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc b/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
+index aa614573d3f67be51cfb696cf08659ba1fabb5ed..4f929813100d85e6a91e7cb732d826a2eb6be548 100644
+--- a/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
++++ b/modules/desktop_capture/fallback_desktop_capturer_wrapper.cc
+@@ -146,6 +146,13 @@ void FallbackDesktopCapturerWrapper::CaptureFrame() {
+   }
+ }
+ 
++//+by xxlang : window mask {
++void FallbackDesktopCapturerWrapper::SetMaskWindow(WindowId window) {
++  main_capturer_->SetMaskWindow(window);
++  secondary_capturer_->SetMaskWindow(window);
++}
++//+by xxlang : window mask }
++
+ void FallbackDesktopCapturerWrapper::SetExcludedWindow(WindowId window) {
+   main_capturer_->SetExcludedWindow(window);
+   secondary_capturer_->SetExcludedWindow(window);
+diff --git a/modules/desktop_capture/fallback_desktop_capturer_wrapper.h b/modules/desktop_capture/fallback_desktop_capturer_wrapper.h
+index f7c980e0779e797f1daf29d9b38fd6975498ddd3..40f0a1e1423bb36359b2484dff0ac4a28c7329ea 100644
+--- a/modules/desktop_capture/fallback_desktop_capturer_wrapper.h
++++ b/modules/desktop_capture/fallback_desktop_capturer_wrapper.h
+@@ -42,6 +42,7 @@ class FallbackDesktopCapturerWrapper final : public DesktopCapturer,
+   void SetSharedMemoryFactory(
+       std::unique_ptr<SharedMemoryFactory> shared_memory_factory) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   void SetExcludedWindow(WindowId window) override;
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+diff --git a/modules/desktop_capture/linux/x11/window_capturer_x11.cc b/modules/desktop_capture/linux/x11/window_capturer_x11.cc
+index 29db991bf082447f198ec6a72e78538825461afd..5c1d24863ca5363cd32bfb5ced6f86a00b738116 100644
+--- a/modules/desktop_capture/linux/x11/window_capturer_x11.cc
++++ b/modules/desktop_capture/linux/x11/window_capturer_x11.cc
+@@ -68,6 +68,12 @@ WindowCapturerX11::~WindowCapturerX11() {
+   x_display_->RemoveEventHandler(ConfigureNotify, this);
+ }
+ 
++//+by xxlang : window mask {
++void WindowCapturerX11::SetMaskWindow(WindowId window) {
++  mask_window_ = window;
++}
++//+by xxlang : window mask }
++
+ bool WindowCapturerX11::GetSourceList(SourceList* sources) {
+   return GetWindowList(&atom_cache_, [this, sources](::Window window) {
+     Source w;
+@@ -188,8 +194,11 @@ void WindowCapturerX11::CaptureFrame() {
+     if (first_capture_) {
+       first_capture_ = false;
+     } else {
+-      RTC_LOG(LS_WARNING) << "WindowCapturerX11 create border for window " << selected_window_;
++      RTC_LOG(LS_INFO) << "WindowCapturerX11 create border for window " << selected_window_ << " with mask " << mask_window_;
+       window_border_->CreateForWindow(selected_window_);
++      if (window_border_->IsCreated()) {
++        window_border_->SetMaskId(mask_window_);
++      }
+     }
+   }
+   //+by xxlang : window border }
+diff --git a/modules/desktop_capture/linux/x11/window_capturer_x11.h b/modules/desktop_capture/linux/x11/window_capturer_x11.h
+index c530c16ff0c335cd16f64b290344035a742ec31d..0baee5d381708778aa8c59cb0106c17abdbfeb12 100644
+--- a/modules/desktop_capture/linux/x11/window_capturer_x11.h
++++ b/modules/desktop_capture/linux/x11/window_capturer_x11.h
+@@ -44,6 +44,7 @@ class WindowCapturerX11 : public DesktopCapturer,
+   // DesktopCapturer interface.
+   void Start(Callback* callback) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+   bool FocusOnSelectedSource() override;
+@@ -65,6 +66,7 @@ class WindowCapturerX11 : public DesktopCapturer,
+   bool has_composite_extension_ = false;
+ 
+   ::Window selected_window_ = 0;
++  ::Window mask_window_ = 0; //+by xxlang : window mask
+   XServerPixelBuffer x_server_pixel_buffer_;
+   XAtomCache atom_cache_;
+   WindowFinderX11 window_finder_;
+diff --git a/modules/desktop_capture/mac/desktop_frame_cgimage.h b/modules/desktop_capture/mac/desktop_frame_cgimage.h
+index d6279f9b3662488ff7bce91191663286fe676eb3..6efd1cf1508c827b6673afde074c1b509613c2bf 100644
+--- a/modules/desktop_capture/mac/desktop_frame_cgimage.h
++++ b/modules/desktop_capture/mac/desktop_frame_cgimage.h
+@@ -33,6 +33,9 @@ class DesktopFrameCGImage final : public DesktopFrame {
+   static std::unique_ptr<DesktopFrameCGImage> CreateForWindow(
+       CGWindowID window_id);
+ 
++  static std::unique_ptr<DesktopFrameCGImage> CreateForWindowWithMask(
++      CGWindowID window_id, CGWindowID mask_id); //+by xxlang : window mask
++
+   ~DesktopFrameCGImage() override;
+ 
+   DesktopFrameCGImage(const DesktopFrameCGImage&) = delete;
+diff --git a/modules/desktop_capture/mac/desktop_frame_cgimage.mm b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
+index 0fb69b272de587db689d8d0e4054de8c79c1315c..dbe4015e6d7f4354f594745e27bd47b3e754cf41 100644
+--- a/modules/desktop_capture/mac/desktop_frame_cgimage.mm
++++ b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
+@@ -43,6 +43,30 @@
+   return DesktopFrameCGImage::CreateFromCGImage(cg_image);
+ }
+ 
++//+by xxlang : window mask {
++// static
++std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForWindowWithMask(CGWindowID window_id, CGWindowID mask_id) {
++  if (window_id == kCGNullWindowID || mask_id == kCGNullWindowID) {
++    return CreateForWindow(window_id);
++  }
++
++  CFMutableArrayRef windowArray = CFArrayCreateMutable(nullptr, 2, nullptr);
++  // Put mask before window.
++  CFArrayAppendValue(windowArray, reinterpret_cast<void*>(mask_id));
++  CFArrayAppendValue(windowArray, reinterpret_cast<void*>(window_id));
++  rtc::ScopedCFTypeRef<CGImageRef> cg_image(
++      CGWindowListCreateImageFromArray(CGRectNull,
++                              windowArray,
++                              kCGWindowImageDefault));
++  CFRelease(windowArray);
++  if (!cg_image) {
++    return nullptr;
++  }
++
++  return DesktopFrameCGImage::CreateFromCGImage(cg_image);
++}
++//+by xxlang : window mask }
++
+ // static
+ std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateFromCGImage(
+     rtc::ScopedCFTypeRef<CGImageRef> cg_image) {
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..80a5ff955a4b73adf7b541396a6aede63790a5f3 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -177,6 +177,12 @@ void WindowCapturerWinGdi::CaptureFrame() {
+   callback_->OnCaptureResult(results.result, std::move(results.frame));
+ }
+ 
++//+by xxlang : window mask {
++void WindowCapturerWinGdi::SetMaskWindow(WindowId window) {
++  mask_window_ = reinterpret_cast<HWND>(window);
++}
++//+by xxlang : window mask }
++
+ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+     bool capture_owned_windows) {
+   TRACE_EVENT0("webrtc", "WindowCapturerWinGdi::CaptureFrame");
+@@ -354,6 +360,12 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+     if (context.IsSelectedWindowValid()) {
+       EnumWindows(OwnedWindowCollector, reinterpret_cast<LPARAM>(&context));
+ 
++      //+by xxlang : window mask {
++      if (IsWindow(mask_window_)) {
++        owned_windows_.push_back(mask_window_);
++      }
++      //+by xxlang : window mask }
++
+       if (!owned_windows_.empty()) {
+         if (!owned_window_capturer_) {
+           owned_window_capturer_ = std::make_unique<WindowCapturerWinGdi>(
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.h b/modules/desktop_capture/win/window_capturer_win_gdi.h
+index bf94dfe192a59a0a56213bd9565bf1fbfe332f46..5757f53fe336f7a44788f257e89cb71701c4e574 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.h
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.h
+@@ -38,6 +38,7 @@ class WindowCapturerWinGdi : public DesktopCapturer {
+   // DesktopCapturer interface.
+   void Start(Callback* callback) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+   bool FocusOnSelectedSource() override;
+@@ -57,6 +58,8 @@ class WindowCapturerWinGdi : public DesktopCapturer {
+   // selected.
+   HWND window_ = nullptr;
+ 
++  HWND mask_window_ = nullptr; //+by xxlang : window mask
++
+   DesktopSize previous_size_;
+ 
+   WindowCaptureHelperWin window_capture_helper_;
+diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
+index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..d420285be429d7622917d71b9d315e96f30c9c0f 100644
+--- a/modules/desktop_capture/window_capturer_mac.mm
++++ b/modules/desktop_capture/window_capturer_mac.mm
+@@ -59,6 +59,7 @@ explicit WindowCapturerMac(
+   // DesktopCapturer interface.
+   void Start(Callback* callback) override;
+   void CaptureFrame() override;
++  void SetMaskWindow(WindowId window) override; //+by xxlang : window mask
+   bool GetSourceList(SourceList* sources) override;
+   bool SelectSource(SourceId id) override;
+   bool FocusOnSelectedSource() override;
+@@ -70,6 +71,8 @@ explicit WindowCapturerMac(
+   // The window being captured.
+   CGWindowID window_id_ = 0;
+ 
++  CGWindowID mask_id_ = 0; //+by xxlang : window mask
++
+   CGWindowID last_window_id_ = 0; //+by xxlang
+ 
+   rtc::scoped_refptr<FullScreenWindowDetector> full_screen_window_detector_;
+@@ -101,6 +104,12 @@ explicit WindowCapturerMac(
+ 
+ WindowCapturerMac::~WindowCapturerMac() {}
+ 
++//+by xxlang : window mask {
++void WindowCapturerMac::SetMaskWindow(WindowId window) {
++  mask_id_ = window;
++}
++//+by xxlang : window mask }
++
+ bool WindowCapturerMac::GetSourceList(SourceList* sources) {
+   return webrtc::GetWindowList(sources, true, true);
+ }
+@@ -186,9 +195,10 @@ explicit WindowCapturerMac(
+     if (first_capture_) {
+       first_capture_ = false;
+     } else {
+-      RTC_LOG(LS_INFO) << "WindowCapturerMac create border for window " << window_id_;
++      RTC_LOG(LS_INFO) << "WindowCapturerMac create border for window " << window_id_ << " with mask " << mask_id_;
+       window_border_->CreateForWindow(window_id_);
+       if (window_border_->IsCreated()) {
++        window_border_->SetMaskId(mask_id_);
+       }
+     }
+   }
+@@ -223,7 +233,7 @@ explicit WindowCapturerMac(
+     last_window_id_ = on_screen_window;
+   }
+ 
+-  std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindow(on_screen_window);
++  std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindowWithMask(on_screen_window, mask_id_); //+by xxlang : window mask
+   if (!frame) {
+     RTC_LOG(LS_WARNING) << "Temporarily failed to capture window.";
+     callback_->OnCaptureResult(Result::ERROR_TEMPORARY, nullptr);
