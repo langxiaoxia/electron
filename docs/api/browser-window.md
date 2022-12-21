@@ -171,6 +171,8 @@ It creates a new `BrowserWindow` with native properties as set by the `options`.
     movable. This is not implemented on Linux. Default is `true`.
   * `minimizable` boolean (optional) _macOS_ _Windows_ - Whether window is
     minimizable. This is not implemented on Linux. Default is `true`.
+  * `overrideMinimize` Boolean (optional) _macOS_ - Whether window is override minimize. This is only
+    implemented on macOS. Default is `false`.
   * `maximizable` boolean (optional) _macOS_ _Windows_ - Whether window is
     maximizable. This is not implemented on Linux. Default is `true`.
   * `closable` boolean (optional) _macOS_ _Windows_ - Whether window is
@@ -540,6 +542,10 @@ Emitted when the window exits from a maximized state.
 #### Event: 'minimize'
 
 Emitted when the window is minimized.
+
+#### Event: 'override-minimize' _macOS_
+
+Emitted when the window is override minimized.
 
 #### Event: 'restore'
 

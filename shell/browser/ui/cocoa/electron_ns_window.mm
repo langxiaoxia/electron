@@ -264,4 +264,13 @@ int ScopedDisableResize::disable_resize_ = 0;
     [super performMiniaturize:sender];
 }
 
+//+by xxlang : override minimize {
+- (void)miniaturize:(id)sender {
+  if (shell_->IsOverrideMinimize())
+    shell_->NotifyWindowOverrideMinimize();
+  else
+    [super miniaturize:sender];
+}
+//+by xxlang : override minimize }
+
 @end

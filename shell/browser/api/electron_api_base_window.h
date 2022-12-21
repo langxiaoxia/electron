@@ -57,6 +57,9 @@ class BaseWindow : public gin_helper::TrackableObject<BaseWindow>,
   void OnWindowMaximize() override;
   void OnWindowUnmaximize() override;
   void OnWindowMinimize() override;
+#if defined(OS_MAC)
+  void OnWindowOverrideMinimize() override;  //+by xxlang : override minimize
+#endif
   void OnWindowRestore() override;
   void OnWindowWillResize(const gfx::Rect& new_bounds,
                           const gfx::ResizeEdge& edge,

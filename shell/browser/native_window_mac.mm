@@ -268,6 +268,12 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   bool minimizable = true;
   options.Get(options::kMinimizable, &minimizable);
 
+  //+by xxlang : override minimize {
+  bool override_minimize = false;
+  options.Get(options::kOverrideMinimize, &override_minimize);
+  SetOverrideMinimize(override_minimize);
+  //+by xxlang : override minimize }
+
   bool maximizable = true;
   options.Get(options::kMaximizable, &maximizable);
 
@@ -664,6 +670,11 @@ bool NativeWindowMac::IsMaximized() {
 }
 
 void NativeWindowMac::Minimize() {
+  //+by xxlang : override minimize {
+  if (IsOverrideMinimize())
+    return;
+  //+by xxlang : override minimize }
+
   if (IsMinimized())
     return;
 
@@ -853,6 +864,16 @@ void NativeWindowMac::SetMinimizable(bool minimizable) {
 bool NativeWindowMac::IsMinimizable() {
   return HasStyleMask(NSWindowStyleMaskMiniaturizable);
 }
+
+//+by xxlang : override minimize {
+void NativeWindowMac::SetOverrideMinimize(bool override_minimize) {
+  override_minimize_ = override_minimize;
+}
+
+bool NativeWindowMac::IsOverrideMinimize() {
+  return override_minimize_;
+}
+//+by xxlang : override minimize }
 
 void NativeWindowMac::SetMaximizable(bool maximizable) {
   maximizable_ = maximizable;
