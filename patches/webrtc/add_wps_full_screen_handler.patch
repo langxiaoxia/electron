@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Wed, 21 Dec 2022 11:09:45 +0800
+Subject: feat: add wps full screen handler.
+
+Add WPS full screen handler on Windows/macOS.
+
+diff --git a/modules/desktop_capture/mac/full_screen_mac_application_handler.cc b/modules/desktop_capture/mac/full_screen_mac_application_handler.cc
+index 45cd3223d29075ae513eecf21d2637b14e9a1771..30df092ed0e981187bd54721d71e2d2db10ec6a6 100644
+--- a/modules/desktop_capture/mac/full_screen_mac_application_handler.cc
++++ b/modules/desktop_capture/mac/full_screen_mac_application_handler.cc
+@@ -224,6 +224,8 @@ CreateFullScreenMacApplicationHandler(DesktopCapturer::SourceId sourceId) {
+       predicate = equal_title_predicate;
+     } else if (owner_name == "OpenOffice") {
+       return std::make_unique<OpenOfficeApplicationHandler>(sourceId);
++    } else if (name == "wpsoffice") { //+by xxlang : wps full screen handler
++      return std::make_unique<OpenOfficeApplicationHandler>(sourceId);
+     }
+ 
+     if (predicate) {
+diff --git a/modules/desktop_capture/win/full_screen_win_application_handler.cc b/modules/desktop_capture/win/full_screen_win_application_handler.cc
+index f7047dba064fff86e51723bbcd14a3d21685b48a..6d90b65320292737f6955fd9e9c4a02370bb2606 100644
+--- a/modules/desktop_capture/win/full_screen_win_application_handler.cc
++++ b/modules/desktop_capture/win/full_screen_win_application_handler.cc
+@@ -269,6 +269,127 @@ std::wstring GetPathByWindowId(HWND window_id) {
+   return result;
+ }
+ 
++//+by xxlang : wps full screen handler {
++std::wstring WindowProcessName(HWND window) {
++  std::wstring exe_path = GetPathByWindowId(window);
++  std::wstring file_name = FileNameFromPath(exe_path);
++  std::transform(file_name.begin(), file_name.end(), file_name.begin(), std::towupper);
++  return file_name;
++}
++
++DesktopCapturer::SourceList GetProcessWindows(
++    const DesktopCapturer::SourceList& sources,
++    const std::wstring processName,
++    HWND window_to_exclude) {
++  DesktopCapturer::SourceList result;
++  std::copy_if(sources.begin(), sources.end(), std::back_inserter(result),
++               [&](DesktopCapturer::Source source) {
++                 const HWND source_hwnd = reinterpret_cast<HWND>(source.id);
++                 return window_to_exclude != source_hwnd && WindowProcessName(source_hwnd) == processName;
++               });
++  return result;
++}
++
++class FullScreenWPSHandler : public FullScreenApplicationHandler {
++ public:
++  explicit FullScreenWPSHandler(DesktopCapturer::SourceId sourceId)
++      : FullScreenApplicationHandler(sourceId) {}
++
++  ~FullScreenWPSHandler() override {}
++
++  DesktopCapturer::SourceId FindFullScreenWindow(
++      const DesktopCapturer::SourceList& window_list,
++      int64_t timestamp) const override {
++    if (window_list.empty())
++      return 0;
++
++    HWND original_window = reinterpret_cast<HWND>(GetSourceId());
++
++    DesktopCapturer::SourceList wpp_windows =
++        GetProcessWindows(window_list, L"WPP.EXE", original_window);
++
++    if (wpp_windows.empty())
++      return 0;
++
++    const auto original_document = GetDocumentFromEditorTitle(original_window);
++
++    for (const auto& source : wpp_windows) {
++      HWND window = reinterpret_cast<HWND>(source.id);
++
++      // Looking for slide show window for the same document
++      const auto slideshow_document = GetDocumentFromSlideShowTitleNew(window);
++
++      if (slideshow_document.empty())
++        continue;
++
++      if (slideshow_document.length() > original_document.length())
++        continue;
++
++      if (slideshow_document == original_document.substr(0, slideshow_document.length()))
++        return source.id;
++
++      if (slideshow_document == original_document.substr(original_document.length() - slideshow_document.length(), original_document.length()))
++        return source.id;
++
++      continue;
++    }
++
++    return 0;
++  }
++
++ private:
++  constexpr static char kDocumentTitleSeparator[] = " - ";
++
++  std::string GetDocumentFromEditorTitle(HWND window) const {
++    std::string title = WindowText(window);
++    auto position = title.find(kDocumentTitleSeparator);
++    return std::string(absl::StripAsciiWhitespace(
++        absl::string_view(title).substr(0, position)));
++  }
++
++  std::string GetDocumentFromSlideShowTitle(HWND window) const {
++    std::string title = WindowText(window);
++    auto left_pos = title.find(kDocumentTitleSeparator);
++    auto right_pos = title.rfind(kDocumentTitleSeparator);
++    constexpr size_t kSeparatorLength = arraysize(kDocumentTitleSeparator) - 1;
++    if (left_pos == std::string::npos || right_pos == std::string::npos)
++      return title;
++
++    if (right_pos > left_pos + kSeparatorLength) {
++      auto result_len = right_pos - left_pos - kSeparatorLength;
++      auto document = absl::string_view(title).substr(left_pos + kSeparatorLength, result_len);
++      return std::string(absl::StripAsciiWhitespace(document));
++    } else {
++      auto document =
++          absl::string_view(title).substr(left_pos + kSeparatorLength, std::wstring::npos);
++      return std::string(absl::StripAsciiWhitespace(document));
++    }
++  }
++
++  constexpr static char kDocumentTitleSeparatorLeft[] = " - [";
++  constexpr static char kDocumentTitleSeparatorRight[] = "]";
++
++  std::string GetDocumentFromSlideShowTitleNew(HWND window) const {
++    std::string title = WindowText(window);
++    auto left_pos = title.find(kDocumentTitleSeparatorLeft);
++    auto right_pos = title.rfind(kDocumentTitleSeparatorRight);
++    constexpr size_t kSeparatorLength = arraysize(kDocumentTitleSeparatorLeft) - 1;
++    if (left_pos == std::string::npos || right_pos == std::string::npos)
++      return title;
++
++    if (right_pos > left_pos + kSeparatorLength) {
++      auto result_len = right_pos - left_pos - kSeparatorLength;
++      auto document = absl::string_view(title).substr(left_pos + kSeparatorLength, result_len);
++      return std::string(absl::StripAsciiWhitespace(document));
++    } else {
++      auto document =
++          absl::string_view(title).substr(left_pos + kSeparatorLength, std::wstring::npos);
++      return std::string(absl::StripAsciiWhitespace(document));
++    }
++  }
++};
++//+by xxlang : wps full screen handler }
++
+ }  // namespace
+ 
+ std::unique_ptr<FullScreenApplicationHandler>
+@@ -285,6 +406,8 @@ CreateFullScreenWinApplicationHandler(DesktopCapturer::SourceId source_id) {
+   } else if (file_name == L"SOFFICE.BIN" &&
+              absl::EndsWith(WindowText(hwnd), "OpenOffice Impress")) {
+     result = std::make_unique<OpenOfficeApplicationHandler>(source_id);
++  } else if (file_name == L"WPS.EXE") {
++    result = std::make_unique<FullScreenWPSHandler>(source_id); //+by xxlang : wps full screen handler
+   }
+ 
+   return result;
