@@ -207,9 +207,15 @@ void DesktopCapturer::StartHandling(bool capture_window,
     // Initialize the source list.
     // Apply the new thumbnail size and restart capture.
     if (capture_window) {
+      bool add_current_process_windows =
+          !content::desktop_capture::
+              ShouldEnumerateCurrentProcessWindows();  //+by xxlang : capture
+                                                       //current process windows
       window_capturer_ = std::make_unique<NativeDesktopMediaList>(
           DesktopMediaList::Type::kWindow,
-          content::desktop_capture::CreateWindowCapturer());
+          content::desktop_capture::CreateWindowCapturer(),
+          add_current_process_windows);  //+by xxlang : capture current process
+                                         //windows
       window_capturer_->SetThumbnailSize(thumbnail_size);
       window_capturer_->Update(
           base::BindOnce(&DesktopCapturer::UpdateSourcesList,
