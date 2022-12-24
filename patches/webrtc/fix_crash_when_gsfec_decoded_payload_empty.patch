@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Sat, 24 Dec 2022 17:22:44 +0800
+Subject: fix: fix crash when gs-fec decoded payload empty.
+
+If Opus with dtx=1, UCM sometimes send Opus without payload, and RTC_CHECK payload size > 0 will crash.
+
+diff --git a/modules/audio_coding/neteq/neteq_impl.cc b/modules/audio_coding/neteq/neteq_impl.cc
+index 02977f1472dbc53c6f08378110033165971ca896..47979b31a51deda0d6f9c0822ad2a69e883ffb87 100644
+--- a/modules/audio_coding/neteq/neteq_impl.cc
++++ b/modules/audio_coding/neteq/neteq_impl.cc
+@@ -538,17 +538,18 @@ void NetEqImpl::AddReceivedPacket(const Packet& packet, bool is_fec) {
+       continue;
+     }
+     recovered_packet->returned = true;
++    RTC_CHECK_GE(recovered_packet->pkt->data.size(), kRtpHeaderSize);
+ 
+-    size_t packet_length = recovered_packet->pkt->data.size();
+-    RtpPacketReceived packet_copy;
+-    packet_copy.Parse(recovered_packet->pkt->data);
++    RtpPacketReceived parsed_packet;
++    if (!parsed_packet.Parse(recovered_packet->pkt->data)) {
++      RTC_LOG(LS_WARNING) << "Parse recovered packet failed.";
++      continue;
++    }
+     RTPHeader header;
+-    packet_copy.GetHeader(&header);
+-    RTC_CHECK_GT(packet_length, header.headerLength);
++    parsed_packet.GetHeader(&header);
+     const uint8_t* payload =
+         recovered_packet->pkt->data.data() + header.headerLength;
+-    size_t payload_length = packet_length - header.headerLength;
+-    rtc::ArrayView<const uint8_t> payload_data(payload, payload_length);
++    rtc::ArrayView<const uint8_t> payload_data(payload, parsed_packet.payload_size());
+     InsertPacketInternal(header, payload_data, true);
+   }
+ }
+diff --git a/modules/rtp_rtcp/source/gs_forward_error_correction.cc b/modules/rtp_rtcp/source/gs_forward_error_correction.cc
+index bf907f52aa1df8349009a7df5dc2c960ed908c23..d87dc80db8b75e82c8556b0324fd44d0ad80aee1 100644
+--- a/modules/rtp_rtcp/source/gs_forward_error_correction.cc
++++ b/modules/rtp_rtcp/source/gs_forward_error_correction.cc
+@@ -169,7 +169,7 @@ void GsForwardErrorCorrection::GsfecLibInitilize() {
+   if (gsfec_load_library()) {
+     RTC_LOG(LS_WARNING) << GsfecLibToString() << " Load OK.";
+ #ifdef RS_FEC_HEAD_LEN_VIDEO_V2
+-    RTC_CHECK_GT(gsfec_version_, 0);
++    RTC_DCHECK_GT(gsfec_version_, 0);
+     gsfec_library.gs_rsfec_initilize(gsfec_video_ ? GS_FEC_VIDEO : GS_FEC_AUDIO, gsfec_version_ - 1, &gsfec_handle_);
+ #else
+     gsfec_library.gs_rsfec_initilize(&gsfec_handle_);
+@@ -185,7 +185,7 @@ void GsForwardErrorCorrection::GsfecLibInitilize() {
+   }
+ #else
+ #ifdef RS_FEC_HEAD_LEN_VIDEO_V2
+-  RTC_CHECK_GT(gsfec_version_, 0);
++  RTC_DCHECK_GT(gsfec_version_, 0);
+   gs_rsfec_initilize(gsfec_video_ ? GS_FEC_VIDEO : GS_FEC_AUDIO, gsfec_version_ - 1, &gsfec_handle_);
+ #else
+   gs_rsfec_initilize(&gsfec_handle_);
+diff --git a/modules/rtp_rtcp/source/gsfec_receiver.cc b/modules/rtp_rtcp/source/gsfec_receiver.cc
+index 2241c1391aa0d4a1b041202bf54013ceb93d5624..a0a2221ec52a92a8b58519c6a3cff8f8981cd253 100644
+--- a/modules/rtp_rtcp/source/gsfec_receiver.cc
++++ b/modules/rtp_rtcp/source/gsfec_receiver.cc
+@@ -161,7 +161,7 @@ void GsfecReceiver::ProcessReceivedPacket(
+     // Set this flag first, since OnRecoveredPacket may end up here
+     // again, with the same packet.
+     recovered_packet->returned = true;
+-    RTC_CHECK_GT(recovered_packet->pkt->data.size(), 0);
++    RTC_CHECK_GE(recovered_packet->pkt->data.size(), kRtpHeaderSize);
+     recovered_packet_receiver_->OnRecoveredPacket(
+         recovered_packet->pkt->data.cdata(),
+         recovered_packet->pkt->data.size());
