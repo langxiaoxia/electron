@@ -6,3 +6,4 @@ add_window_capture_mask.patch
 add_window_capture_pause_iconic.patch
 add_wps_full_screen_handler.patch
 fix_crash_when_gsfec_decoded_payload_empty.patch
+fix_gs_bug_242868.patch
