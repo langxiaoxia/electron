@@ -135,3 +135,4 @@ add_desktop_capture_border
 add_container_id.patch
 add_chrome_media_mask_id.patch
 add_window_capture_pause_iconic.patch
+fix_gs_bug_242036.patch

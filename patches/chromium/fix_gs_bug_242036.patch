@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 26 Dec 2022 11:40:36 +0800
+Subject: fix: gs bug 242036.
+
+The others can hear echo when pc share audio.
+
+diff --git a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+index 030f4ae0b3eed6cdde8c6b4703ec122a99e36eb7..3a990705e0ee925ea8eca9674633c7efdc288637 100644
+--- a/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
++++ b/third_party/blink/renderer/modules/mediastream/user_media_processor.cc
+@@ -1556,7 +1556,7 @@ UserMediaProcessor::CreateAudioSource(
+   blink::AudioProcessingProperties audio_processing_properties =
+       current_request_info_->audio_capture_settings()
+           .audio_processing_properties();
+-  if (blink::IsScreenCaptureMediaType(device.type) ||
++  if (//blink::IsScreenCaptureMediaType(device.type) ||
+       !blink::MediaStreamAudioProcessor::WouldModifyAudio(
+           audio_processing_properties)) {
+     SendLogMessage(
