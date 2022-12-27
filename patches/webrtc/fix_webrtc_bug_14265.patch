@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Tue, 27 Dec 2022 11:08:30 +0800
+Subject: fix: webrtc bug 14265.
+
+Don't override permanent errors in WindowCapturerWinGdi.
+
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index bb48222e64aeb7e12058643ea7f90f3e53f5bca0..17b16e2ce07465812675dbd21cf37c1f05748a70 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -164,7 +164,10 @@ void WindowCapturerWinGdi::CaptureFrame() {
+ 
+   CaptureResults results = CaptureFrame(/*capture_owned_windows*/ true);
+   if (!results.frame) {
+-    callback_->OnCaptureResult(Result::ERROR_TEMPORARY, nullptr);
++    // Don't return success if we have no frame.
++    results.result = results.result == Result::SUCCESS ? Result::ERROR_TEMPORARY
++                                                       : results.result;
++    callback_->OnCaptureResult(results.result, nullptr);
+     return;
+   }
+ 
