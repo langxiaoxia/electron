@@ -6,10 +6,23 @@ Subject: fix: fix crash when gs-fec decoded payload empty.
 If Opus with dtx=1, UCM sometimes send Opus without payload, and RTC_CHECK payload size > 0 will crash.
 
 diff --git a/modules/audio_coding/neteq/neteq_impl.cc b/modules/audio_coding/neteq/neteq_impl.cc
-index 02977f1472dbc53c6f08378110033165971ca896..47979b31a51deda0d6f9c0822ad2a69e883ffb87 100644
+index 02977f1472dbc53c6f08378110033165971ca896..a0ecf67ccc95ca018acac33f06aae517b9a55e47 100644
 --- a/modules/audio_coding/neteq/neteq_impl.cc
 +++ b/modules/audio_coding/neteq/neteq_impl.cc
-@@ -538,17 +538,18 @@ void NetEqImpl::AddReceivedPacket(const Packet& packet, bool is_fec) {
+@@ -509,6 +509,12 @@ NetEq::Operation NetEqImpl::last_operation_for_test() const {
+ //+by xxlang : gsfec {
+ void NetEqImpl::AddReceivedPacket(const Packet& packet, bool is_fec) {
+   if (gsfec_decoder_ == nullptr) {
++    RTC_LOG(LS_WARNING) << "gsfec decoder is null.";
++    return;
++  }
++
++  if (packet.payload.empty()) {
++    RTC_LOG(LS_INFO) << "payload is empty.";
+     return;
+   }
+ 
+@@ -538,17 +544,18 @@ void NetEqImpl::AddReceivedPacket(const Packet& packet, bool is_fec) {
        continue;
      }
      recovered_packet->returned = true;
