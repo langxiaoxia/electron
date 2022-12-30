@@ -1,0 +1,2342 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 30 Dec 2022 13:57:07 +0800
+Subject: feat: add AudioContext.setSinkId().
+
+https://bugs.chromium.org/p/chromium/issues/detail?id=1216187
+
+diff --git a/content/renderer/media/renderer_webaudiodevice_impl.cc b/content/renderer/media/renderer_webaudiodevice_impl.cc
+index 1d93a749f6a80ea7d79419af5bfa9848137e400b..cbc85f31418c85f1ca0c3c4fada3cf96ace8ea30 100644
+--- a/content/renderer/media/renderer_webaudiodevice_impl.cc
++++ b/content/renderer/media/renderer_webaudiodevice_impl.cc
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
++// Copyright 2012 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -17,6 +17,7 @@
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
+ #include "base/time/time.h"
++#include "media/audio/null_audio_sink.h"
+ #include "media/base/audio_timestamp_helper.h"
+ #include "media/base/limits.h"
+ #include "media/base/silent_sink_suspender.h"
+@@ -29,6 +30,7 @@
+ using blink::AudioDeviceFactory;
+ using blink::WebAudioDevice;
+ using blink::WebAudioLatencyHint;
++using blink::WebAudioSinkDescriptor;
+ using blink::WebLocalFrame;
+ using blink::WebVector;
+ using blink::WebView;
+@@ -86,18 +88,6 @@ int GetOutputBufferSize(const blink::WebAudioLatencyHint& latency_hint,
+   return 0;
+ }
+ 
+-blink::LocalFrameToken FrameTokenFromCurrentContext() {
+-  // TODO(crbug.com/1307461): The assumption here is incorrect;
+-  // RendererWebAudioDevice can be created without a valid frame/document. In
+-  // that case, FrameForCurrentContext() below will be invalid.
+-
+-  // We can perform look-ups to determine which `blink::WebView` is starting the
+-  // audio device.  The reason for all this is because the creator of the
+-  // WebAudio objects might not be the actual source of the audio (e.g.,
+-  // an extension creates a object that is passed and used within a page).
+-  return blink::WebLocalFrame::FrameForCurrentContext()->GetLocalFrameToken();
+-}
+-
+ media::AudioParameters GetOutputDeviceParameters(
+     const blink::LocalFrameToken& frame_token,
+     const base::UnguessableToken& session_id,
+@@ -107,39 +97,58 @@ media::AudioParameters GetOutputDeviceParameters(
+       .output_params();
+ }
+ 
++scoped_refptr<media::AudioRendererSink> GetNullAudioSink(
++    const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
++  return base::MakeRefCounted<media::NullAudioSink>(task_runner);
++}
++
+ }  // namespace
+ 
+ std::unique_ptr<RendererWebAudioDeviceImpl> RendererWebAudioDeviceImpl::Create(
++    const WebAudioSinkDescriptor& sink_descriptor,
+     media::ChannelLayout layout,
+-    int channels,
++    int number_of_output_channels,
+     const blink::WebAudioLatencyHint& latency_hint,
+     WebAudioDevice::RenderCallback* callback,
+     const base::UnguessableToken& session_id) {
+   return std::unique_ptr<RendererWebAudioDeviceImpl>(
+       new RendererWebAudioDeviceImpl(
+-          layout, channels, latency_hint, callback, session_id,
+-          base::BindOnce(&GetOutputDeviceParameters),
+-          base::BindOnce(&FrameTokenFromCurrentContext)));
++          sink_descriptor, layout, number_of_output_channels, latency_hint,
++          callback, session_id, base::BindOnce(&GetOutputDeviceParameters),
++          base::BindRepeating(&GetNullAudioSink)));
+ }
+ 
+ RendererWebAudioDeviceImpl::RendererWebAudioDeviceImpl(
++    const WebAudioSinkDescriptor& sink_descriptor,
+     media::ChannelLayout layout,
+-    int channels,
++    int number_of_output_channels,
+     const blink::WebAudioLatencyHint& latency_hint,
+     WebAudioDevice::RenderCallback* callback,
+     const base::UnguessableToken& session_id,
+     OutputDeviceParamsCallback device_params_cb,
+-    RenderFrameTokenCallback render_frame_token_cb)
+-    : latency_hint_(latency_hint),
++    CreateSilentSinkCallback create_silent_sink_cb)
++    : sink_descriptor_(sink_descriptor),
++      latency_hint_(latency_hint),
+       client_callback_(callback),
+       session_id_(session_id),
+-      frame_token_(std::move(render_frame_token_cb).Run()) {
++      frame_token_(sink_descriptor.Token()),
++      create_silent_sink_cb_(std::move(create_silent_sink_cb)) {
+   DCHECK(client_callback_);
+   SendLogMessage(base::StringPrintf("%s", __func__));
+ 
++  std::string device_id;
++  switch (sink_descriptor_.Type()) {
++    case blink::WebAudioSinkDescriptor::kAudible:
++      device_id = sink_descriptor_.SinkId().Utf8();
++      break;
++    case blink::WebAudioSinkDescriptor::kSilent:
++      // Use the default audio device's parameters for a silent sink.
++      device_id = std::string();
++      break;
++  }
++
+   media::AudioParameters hardware_params(
+-      std::move(device_params_cb)
+-          .Run(frame_token_, session_id_, std::string()));
++      std::move(device_params_cb).Run(frame_token_, session_id_, device_id));
+ 
+   // On systems without audio hardware the returned parameters may be invalid.
+   // In which case just choose whatever we want for the fake device.
+@@ -162,10 +171,6 @@ RendererWebAudioDeviceImpl::RendererWebAudioDeviceImpl(
+   sink_params_.Reset(hardware_params.format(), layout,
+                      hardware_params.sample_rate(), output_buffer_size);
+ 
+-  // Always set channels, this should be a no-op in all but the discrete case;
+-  // this call will fail if channels doesn't match the layout in other cases.
+-  sink_params_.set_channels_for_discrete(channels);
+-
+   // Specify the latency info to be passed to the browser side.
+   sink_params_.set_latency_tag(latency);
+   SendLogMessage(
+@@ -187,17 +192,26 @@ void RendererWebAudioDeviceImpl::Start() {
+   if (sink_)
+     return;  // Already started.
+ 
+-  sink_ = AudioDeviceFactory::GetInstance()->NewAudioRendererSink(
+-      GetLatencyHintSourceType(latency_hint_.Category()), frame_token_,
+-      media::AudioSinkParameters(session_id_, std::string()));
+-
+-  // Use a task runner instead of the render thread for fake Render() calls
+-  // since it has special connotations for Blink and garbage collection. Timeout
+-  // value chosen to be highly unlikely in the normal case.
+-  webaudio_suspender_ = std::make_unique<media::SilentSinkSuspender>(
+-      this, base::Seconds(30), sink_params_, sink_, GetSuspenderTaskRunner());
+-  sink_->Initialize(sink_params_, webaudio_suspender_.get());
+-
++  switch (sink_descriptor_.Type()) {
++    case blink::WebAudioSinkDescriptor::kAudible:
++      sink_ = AudioDeviceFactory::GetInstance()->NewAudioRendererSink(
++          GetLatencyHintSourceType(latency_hint_.Category()), frame_token_,
++          media::AudioSinkParameters(session_id_,
++                                     sink_descriptor_.SinkId().Utf8()));
++
++      // Use a task runner instead of the render thread for fake Render() calls
++      // since it has special connotations for Blink and garbage collection.
++      // Timeout value chosen to be highly unlikely in the normal case.
++      silent_sink_suspender_ = std::make_unique<media::SilentSinkSuspender>(
++          this, base::Seconds(30), sink_params_, sink_,
++          GetSilentSinkTaskRunner());
++      sink_->Initialize(sink_params_, silent_sink_suspender_.get());
++      break;
++    case blink::WebAudioSinkDescriptor::kSilent:
++      sink_ = create_silent_sink_cb_.Run(GetSilentSinkTaskRunner());
++      sink_->Initialize(sink_params_, this);
++      break;
++  }
+   sink_->Start();
+   sink_->Play();
+ }
+@@ -207,8 +221,8 @@ void RendererWebAudioDeviceImpl::Pause() {
+   SendLogMessage(base::StringPrintf("%s", __func__));
+   if (sink_)
+     sink_->Pause();
+-  if (webaudio_suspender_)
+-    webaudio_suspender_->OnPaused();
++  if (silent_sink_suspender_)
++    silent_sink_suspender_->OnPaused();
+ }
+ 
+ void RendererWebAudioDeviceImpl::Resume() {
+@@ -226,7 +240,7 @@ void RendererWebAudioDeviceImpl::Stop() {
+     sink_ = nullptr;
+   }
+ 
+-  webaudio_suspender_.reset();
++  silent_sink_suspender_.reset();
+ }
+ 
+ double RendererWebAudioDeviceImpl::SampleRate() {
+@@ -244,8 +258,8 @@ void RendererWebAudioDeviceImpl::SetDetectSilence(
+                          enable_silence_detection ? "true" : "false"));
+   DCHECK(thread_checker_.CalledOnValidThread());
+ 
+-  if (webaudio_suspender_)
+-    webaudio_suspender_->SetDetectSilence(enable_silence_detection);
++  if (silent_sink_suspender_)
++    silent_sink_suspender_->SetDetectSilence(enable_silence_detection);
+ }
+ 
+ int RendererWebAudioDeviceImpl::Render(base::TimeDelta delay,
+@@ -274,19 +288,19 @@ void RendererWebAudioDeviceImpl::OnRenderError() {
+   // TODO(crogers): implement error handling.
+ }
+ 
+-void RendererWebAudioDeviceImpl::SetSuspenderTaskRunnerForTesting(
++void RendererWebAudioDeviceImpl::SetSilentSinkTaskRunnerForTesting(
+     scoped_refptr<base::SingleThreadTaskRunner> task_runner) {
+-  suspender_task_runner_ = std::move(task_runner);
++  silent_sink_task_runner_ = std::move(task_runner);
+ }
+ 
+ scoped_refptr<base::SingleThreadTaskRunner>
+-RendererWebAudioDeviceImpl::GetSuspenderTaskRunner() {
+-  if (!suspender_task_runner_) {
+-    suspender_task_runner_ = base::ThreadPool::CreateSingleThreadTaskRunner(
++RendererWebAudioDeviceImpl::GetSilentSinkTaskRunner() {
++  if (!silent_sink_task_runner_) {
++    silent_sink_task_runner_ = base::ThreadPool::CreateSingleThreadTaskRunner(
+         {base::TaskPriority::USER_VISIBLE,
+          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+   }
+-  return suspender_task_runner_;
++  return silent_sink_task_runner_;
+ }
+ 
+ void RendererWebAudioDeviceImpl::SendLogMessage(const std::string& message) {
+diff --git a/content/renderer/media/renderer_webaudiodevice_impl.h b/content/renderer/media/renderer_webaudiodevice_impl.h
+index 085ca816132ebad315cf5d750bf9a84b9a3b3fcb..50f202c4453888bc31b49b95f851fa06afbd6df8 100644
+--- a/content/renderer/media/renderer_webaudiodevice_impl.h
++++ b/content/renderer/media/renderer_webaudiodevice_impl.h
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
++// Copyright 2012 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -18,6 +18,7 @@
+ #include "third_party/blink/public/common/tokens/tokens.h"
+ #include "third_party/blink/public/platform/web_audio_device.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/public/platform/web_vector.h"
+ 
+ namespace base {
+@@ -29,6 +30,9 @@ class SilentSinkSuspender;
+ }
+ 
+ namespace content {
++
++// The actual implementation of Blink "WebAudioDevice" that handles the
++// connection between Blink Web Audio API and the media renderer.
+ class CONTENT_EXPORT RendererWebAudioDeviceImpl
+     : public blink::WebAudioDevice,
+       public media::AudioRendererSink::RenderCallback {
+@@ -40,8 +44,9 @@ class CONTENT_EXPORT RendererWebAudioDeviceImpl
+   ~RendererWebAudioDeviceImpl() override;
+ 
+   static std::unique_ptr<RendererWebAudioDeviceImpl> Create(
++      const blink::WebAudioSinkDescriptor& sink_descriptor,
+       media::ChannelLayout layout,
+-      int channels,
++      int number_of_output_channels,
+       const blink::WebAudioLatencyHint& latency_hint,
+       blink::WebAudioDevice::RenderCallback* callback,
+       const base::UnguessableToken& session_id);
+@@ -66,7 +71,7 @@ class CONTENT_EXPORT RendererWebAudioDeviceImpl
+ 
+   void OnRenderError() override;
+ 
+-  void SetSuspenderTaskRunnerForTesting(
++  void SetSilentSinkTaskRunnerForTesting(
+       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+ 
+   const media::AudioParameters& get_sink_params_for_testing() {
+@@ -80,24 +85,30 @@ class CONTENT_EXPORT RendererWebAudioDeviceImpl
+       const base::UnguessableToken& session_id,
+       const std::string& device_id)>;
+ 
+-  // Callback get render frame token for current context (for tests).
+-  using RenderFrameTokenCallback = base::OnceCallback<blink::LocalFrameToken()>;
++  using CreateSilentSinkCallback =
++      base::RepeatingCallback<scoped_refptr<media::AudioRendererSink>(
++          const scoped_refptr<base::SingleThreadTaskRunner>& task_runner)>;
+ 
+-  RendererWebAudioDeviceImpl(media::ChannelLayout layout,
+-                             int channels,
+-                             const blink::WebAudioLatencyHint& latency_hint,
+-                             blink::WebAudioDevice::RenderCallback* callback,
+-                             const base::UnguessableToken& session_id,
+-                             OutputDeviceParamsCallback device_params_cb,
+-                             RenderFrameTokenCallback render_frame_token_cb);
++  RendererWebAudioDeviceImpl(
++      const blink::WebAudioSinkDescriptor& sink_descriptor,
++      media::ChannelLayout layout,
++      int number_of_output_channels,
++      const blink::WebAudioLatencyHint& latency_hint,
++      blink::WebAudioDevice::RenderCallback* callback,
++      const base::UnguessableToken& session_id,
++      OutputDeviceParamsCallback device_params_cb,
++      CreateSilentSinkCallback create_silent_sink_cb);
+ 
+  private:
+-  scoped_refptr<base::SingleThreadTaskRunner> GetSuspenderTaskRunner();
++  scoped_refptr<base::SingleThreadTaskRunner> GetSilentSinkTaskRunner();
+ 
+   void SendLogMessage(const std::string& message);
+ 
+   media::AudioParameters sink_params_;
+ 
++  // To cache the device identifier for sink creation.
++  const blink::WebAudioSinkDescriptor sink_descriptor_;
++
+   const blink::WebAudioLatencyHint latency_hint_;
+ 
+   // Weak reference to the callback into WebKit code.
+@@ -117,17 +128,20 @@ class CONTENT_EXPORT RendererWebAudioDeviceImpl
+   const base::UnguessableToken session_id_;
+ 
+   // Used to suspend |sink_| usage when silence has been detected for too long.
+-  std::unique_ptr<media::SilentSinkSuspender> webaudio_suspender_;
++  std::unique_ptr<media::SilentSinkSuspender> silent_sink_suspender_;
+ 
+   // Render frame token for the current context.
+   blink::LocalFrameToken frame_token_;
+ 
+-  // Allow unit tests to set a custom TaskRunner for |webaudio_suspender_|.
+-  scoped_refptr<base::SingleThreadTaskRunner> suspender_task_runner_;
++  // An alternative task runner for `silent_sink_suspender_` or a silent audio
++  // sink.
++  scoped_refptr<base::SingleThreadTaskRunner> silent_sink_task_runner_;
+ 
+   // Used to trigger one single textlog indicating that rendering started as
+   // intended. Set to true once in the first call to the Render callback.
+   bool is_rendering_ = false;
++
++  CreateSilentSinkCallback create_silent_sink_cb_;
+ };
+ 
+ }  // namespace content
+diff --git a/content/renderer/media/renderer_webaudiodevice_impl_unittest.cc b/content/renderer/media/renderer_webaudiodevice_impl_unittest.cc
+index 3837b672da4a19e6a47fadaf4c41050833d687d1..9d707633f3494b1a0f5b3956ffc7f20d81c3bad7 100644
+--- a/content/renderer/media/renderer_webaudiodevice_impl_unittest.cc
++++ b/content/renderer/media/renderer_webaudiodevice_impl_unittest.cc
+@@ -1,4 +1,4 @@
+-// Copyright 2016 The Chromium Authors. All rights reserved.
++// Copyright 2016 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -20,45 +20,72 @@
+ #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
+ #include "third_party/blink/public/web/modules/media/audio/audio_device_factory.h"
+ 
+-using testing::_;
++using ::testing::_;
++using ::testing::InSequence;
+ 
+ namespace content {
+ 
+ namespace {
+ 
+-const int kHardwareSampleRate = 44100;
+-const int kHardwareBufferSize = 128;
+-const blink::LocalFrameToken kFrameToken;
++class MockAudioRendererSink : public media::AudioRendererSink {
++ public:
++  explicit MockAudioRendererSink() = default;
++  void Initialize(const media::AudioParameters& params,
++                  RenderCallback* callback) override {
++    callback_ = callback;
++  }
++  MOCK_METHOD(void, Start, (), (override));
++  MOCK_METHOD(void, Stop, (), (override));
++  MOCK_METHOD(void, Pause, (), (override));
++  MOCK_METHOD(void, Play, (), (override));
++  MOCK_METHOD(void, Flush, (), (override));
++  MOCK_METHOD(bool, SetVolume, (double volume), (override));
++  MOCK_METHOD(media::OutputDeviceInfo, GetOutputDeviceInfo, (), (override));
++  MOCK_METHOD(void,
++              GetOutputDeviceInfoAsync,
++              (OutputDeviceInfoCB info_cb),
++              (override));
++  MOCK_METHOD(bool, IsOptimizedForHardwareParameters, (), (override));
++  MOCK_METHOD(bool, CurrentThreadIsRenderingThread, (), (override));
++
++  media::AudioRendererSink::RenderCallback* callback_ = nullptr;
++
++ private:
++  ~MockAudioRendererSink() override = default;
++};
+ 
+-blink::LocalFrameToken MockFrameTokenFromCurrentContext() {
+-  return kFrameToken;
+-}
++constexpr int kHardwareSampleRate = 44100;
++constexpr int kHardwareBufferSize = 128;
++const blink::LocalFrameToken kFrameToken;
+ 
+ media::AudioParameters MockGetOutputDeviceParameters(
+     const blink::LocalFrameToken& frame_token,
+     const base::UnguessableToken& session_id,
+     const std::string& device_id) {
+   return media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
+-                                media::CHANNEL_LAYOUT_STEREO,
++                                media::ChannelLayoutConfig::Stereo(),
+                                 kHardwareSampleRate, kHardwareBufferSize);
+ }
+ 
+ class RendererWebAudioDeviceImplUnderTest : public RendererWebAudioDeviceImpl {
+  public:
+   RendererWebAudioDeviceImplUnderTest(
++      const blink::WebAudioSinkDescriptor& sink_descriptor,
+       media::ChannelLayout layout,
+-      int channels,
++      int number_of_output_channels,
+       const blink::WebAudioLatencyHint& latency_hint,
+       blink::WebAudioDevice::RenderCallback* callback,
+-      const base::UnguessableToken& session_id)
++      const base::UnguessableToken& session_id,
++      CreateSilentSinkCallback silent_sink_callback)
+       : RendererWebAudioDeviceImpl(
++            sink_descriptor,
+             layout,
+-            channels,
++            number_of_output_channels,
+             latency_hint,
+             callback,
+             session_id,
+             base::BindOnce(&MockGetOutputDeviceParameters),
+-            base::BindOnce(&MockFrameTokenFromCurrentContext)) {}
++            std::move(silent_sink_callback)) {}
+ };
+ 
+ }  // namespace
+@@ -67,24 +94,70 @@ class RendererWebAudioDeviceImplTest
+     : public blink::WebAudioDevice::RenderCallback,
+       public blink::AudioDeviceFactory,
+       public testing::Test {
++ public:
++  MOCK_METHOD(void,
++              Render,
++              (const blink::WebVector<float*>& destination_data,
++               uint32_t number_of_frames,
++               double delay,
++               double delay_timestamp,
++               size_t prior_frames_skipped),
++              (override));
++
+  protected:
+-  RendererWebAudioDeviceImplTest() {}
++  RendererWebAudioDeviceImplTest() {
++    mock_audio_renderer_sink_ = base::MakeRefCounted<MockAudioRendererSink>();
++  }
++
++  scoped_refptr<media::AudioRendererSink> MockCreateSilentSink(
++      const scoped_refptr<base::SequencedTaskRunner>& task_runner) {
++    return mock_audio_renderer_sink_;
++  }
+ 
+   void SetupDevice(blink::WebAudioLatencyHint latencyHint) {
++    blink::WebAudioSinkDescriptor sink_descriptor(
++        blink::WebString::FromUTF8(std::string()), kFrameToken);
+     webaudio_device_ = std::make_unique<RendererWebAudioDeviceImplUnderTest>(
+-        media::CHANNEL_LAYOUT_MONO, 1, latencyHint, this,
+-        base::UnguessableToken());
+-    webaudio_device_->SetSuspenderTaskRunnerForTesting(
++        sink_descriptor, media::CHANNEL_LAYOUT_MONO, 1, latencyHint, this,
++        base::UnguessableToken(),
++        base::BindRepeating(
++            &RendererWebAudioDeviceImplTest::MockCreateSilentSink,
++            // Guaranteed to be valid because |this| owns |webaudio_device_| and
++            // so will outlive it.
++            base::Unretained(this)));
++    webaudio_device_->SetSilentSinkTaskRunnerForTesting(
+         blink::scheduler::GetSingleThreadTaskRunnerForTesting());
+   }
+ 
+   void SetupDevice(media::ChannelLayout layout, int channels) {
++    blink::WebAudioSinkDescriptor sink_descriptor(
++        blink::WebString::FromUTF8(std::string()), kFrameToken);
+     webaudio_device_ = std::make_unique<RendererWebAudioDeviceImplUnderTest>(
+-        layout, channels,
++        sink_descriptor, layout, channels,
+         blink::WebAudioLatencyHint(
+             blink::WebAudioLatencyHint::kCategoryInteractive),
+-        this, base::UnguessableToken());
+-    webaudio_device_->SetSuspenderTaskRunnerForTesting(
++        this, base::UnguessableToken(),
++        base::BindRepeating(
++            &RendererWebAudioDeviceImplTest::MockCreateSilentSink,
++            // Guaranteed to be valid because |this| owns |webaudio_device_| and
++            // so will outlive it.
++            base::Unretained(this)));
++    webaudio_device_->SetSilentSinkTaskRunnerForTesting(
++        blink::scheduler::GetSingleThreadTaskRunnerForTesting());
++  }
++
++  void SetupDevice(blink::WebAudioSinkDescriptor sink_descriptor) {
++    webaudio_device_ = std::make_unique<RendererWebAudioDeviceImplUnderTest>(
++        sink_descriptor, media::CHANNEL_LAYOUT_MONO, 1,
++        blink::WebAudioLatencyHint(
++            blink::WebAudioLatencyHint::kCategoryInteractive),
++        this, base::UnguessableToken(),
++        base::BindRepeating(
++            &RendererWebAudioDeviceImplTest::MockCreateSilentSink,
++            // Guaranteed to be valid because |this| owns |webaudio_device_| and
++            // so will outlive it.
++            base::Unretained(this)));
++    webaudio_device_->SetSilentSinkTaskRunnerForTesting(
+         blink::scheduler::GetSingleThreadTaskRunnerForTesting());
+   }
+ 
+@@ -109,6 +182,7 @@ class RendererWebAudioDeviceImplTest
+ 
+   std::unique_ptr<RendererWebAudioDeviceImpl> webaudio_device_;
+   base::test::SingleThreadTaskEnvironment task_environment_;
++  scoped_refptr<MockAudioRendererSink> mock_audio_renderer_sink_;
+ };
+ 
+ TEST_F(RendererWebAudioDeviceImplTest, ChannelLayout) {
+@@ -208,4 +282,148 @@ TEST_F(RendererWebAudioDeviceImplTest, TestLatencyHintValues) {
+   EXPECT_GE(balancedBufferSize, interactiveBufferSize);
+ }
+ 
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_RenderWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*this, Render).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  mock_audio_renderer_sink_->callback_->Render(
++      base::TimeDelta::Min(), base::TimeTicks::Now(), 0,
++      media::AudioBus::Create(1, kHardwareBufferSize).get());
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_PauseResumeWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Pause).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  webaudio_device_->Pause();
++  webaudio_device_->Resume();
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest,
++       NullSink_StartRenderStopStartRenderStopWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*this, Render).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*this, Render).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  mock_audio_renderer_sink_->callback_->Render(
++      base::TimeDelta::Min(), base::TimeTicks::Now(), 0,
++      media::AudioBus::Create(1, kHardwareBufferSize).get());
++  webaudio_device_->Stop();
++  webaudio_device_->Start();
++  mock_audio_renderer_sink_->callback_->Render(
++      base::TimeDelta::Min(), base::TimeTicks::Now(), 0,
++      media::AudioBus::Create(1, kHardwareBufferSize).get());
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_RepeatedStartWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  webaudio_device_->Start();
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_RepeatedPauseWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Pause).Times(2);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  webaudio_device_->Pause();
++  webaudio_device_->Pause();
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_RepeatedResumeWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Pause).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(2);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  webaudio_device_->Pause();
++  webaudio_device_->Resume();
++  webaudio_device_->Resume();
++  webaudio_device_->Stop();
++}
++
++TEST_F(RendererWebAudioDeviceImplTest, NullSink_RepeatedStopWorks) {
++  {
++    InSequence s;
++
++    EXPECT_CALL(*mock_audio_renderer_sink_, Start).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Play).Times(1);
++    EXPECT_CALL(*mock_audio_renderer_sink_, Stop).Times(1);
++  }
++
++  // The WebAudioSinkDescriptor constructor with frame token will construct a
++  // silent sink.
++  SetupDevice(blink::WebAudioSinkDescriptor(kFrameToken));
++  webaudio_device_->Start();
++  webaudio_device_->Stop();
++  webaudio_device_->Stop();
++}
++
+ }  // namespace content
+diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
+index db175070bdcefc84f1d6001568941a9f4f14789c..dfe3df67c90c71de9d7d7b83e4a4eb71e0634930 100644
+--- a/content/renderer/renderer_blink_platform_impl.cc
++++ b/content/renderer/renderer_blink_platform_impl.cc
+@@ -90,6 +90,7 @@
+ #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
+ #include "third_party/blink/public/platform/url_conversion.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/public/platform/web_code_cache_loader.h"
+ #include "third_party/blink/public/platform/web_security_origin.h"
+ #include "third_party/blink/public/platform/web_theme_engine.h"
+@@ -123,6 +124,7 @@
+ using blink::Platform;
+ using blink::WebAudioDevice;
+ using blink::WebAudioLatencyHint;
++using blink::WebAudioSinkDescriptor;
+ using blink::WebMediaStreamTrack;
+ using blink::WebString;
+ using blink::WebURL;
+@@ -465,19 +467,26 @@ base::TimeDelta RendererBlinkPlatformImpl::GetHungRendererDelay() {
+ }
+ 
+ std::unique_ptr<WebAudioDevice> RendererBlinkPlatformImpl::CreateAudioDevice(
+-    unsigned output_channels,
++    const WebAudioSinkDescriptor& sink_descriptor,
++    unsigned number_of_output_channels,
+     const blink::WebAudioLatencyHint& latency_hint,
+     WebAudioDevice::RenderCallback* callback) {
+-  // The |output_channels| does not exactly identify the channel layout of the
+-  // device. The switch statement below assigns a best guess to the channel
+-  // layout based on number of channels.
+-  media::ChannelLayout layout = media::GuessChannelLayout(output_channels);
+-  if (layout == media::CHANNEL_LAYOUT_UNSUPPORTED)
++  // The `number_of_output_channels` does not manifest the actual channel
++  // layout of the audio output device. We use the best guess to the channel
++  // layout based on the number of channels.
++  media::ChannelLayout layout =
++      media::GuessChannelLayout(number_of_output_channels);
++
++  // Use "discrete" channel layout when the best guess was not successful.
++  if (layout == media::CHANNEL_LAYOUT_UNSUPPORTED) {
+     layout = media::CHANNEL_LAYOUT_DISCRETE;
++  }
+ 
++  // Using `UnguessableToken()` prevents from guessing the session ID to gain
++  // access to a capture stream.
+   return RendererWebAudioDeviceImpl::Create(
+-      layout, output_channels, latency_hint, callback,
+-      /*session_id=*/base::UnguessableToken());
++      sink_descriptor, layout, number_of_output_channels, latency_hint,
++      callback, /*session_id=*/base::UnguessableToken());
+ }
+ 
+ bool RendererBlinkPlatformImpl::DecodeAudioFileData(
+diff --git a/content/renderer/renderer_blink_platform_impl.h b/content/renderer/renderer_blink_platform_impl.h
+index f16af9a3e4027066cddbd5082998adc837e9b5dc..28ec22e2f0c447671847ede87004906e27fecb7b 100644
+--- a/content/renderer/renderer_blink_platform_impl.h
++++ b/content/renderer/renderer_blink_platform_impl.h
+@@ -116,7 +116,8 @@ class CONTENT_EXPORT RendererBlinkPlatformImpl : public BlinkPlatformImpl {
+   unsigned AudioHardwareOutputChannels() override;
+   base::TimeDelta GetHungRendererDelay() override;
+   std::unique_ptr<blink::WebAudioDevice> CreateAudioDevice(
+-      unsigned output_channels,
++      const blink::WebAudioSinkDescriptor& sink_descriptor,
++      unsigned number_of_output_channels,
+       const blink::WebAudioLatencyHint& latency_hint,
+       blink::WebAudioDevice::RenderCallback* callback) override;
+   bool DecodeAudioFileData(blink::WebAudioBus* destination_bus,
+diff --git a/third_party/blink/manual_tests/webaudio/audiocontext-setsinkid.html b/third_party/blink/manual_tests/webaudio/audiocontext-setsinkid.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..08b4d0d5f7153943e7aada3ab435d4a19fcead3d
+--- /dev/null
++++ b/third_party/blink/manual_tests/webaudio/audiocontext-setsinkid.html
+@@ -0,0 +1,146 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++  <meta charset="UTF-8">
++  <title>Test output device selection in AudioContext.</title>
++  <style type="text/css">
++    body {
++      font-family: sans-serif;
++      padding: 1em;
++    }
++
++    .row {
++      margin-top: 1em;
++    }
++
++    #appView {
++      margin-top: 1em;
++      font-family: monospace;
++    }
++
++    #log {
++      line-height: 2em;
++      font-size: 1.0em;
++      padding: 0.5em;
++      border: 1px solid #ccc;
++      color: #666;
++      background-color: #eee;
++    }
++
++    #device-dropdown {
++      font-size: 1.0em;
++      padding: 0.5em;
++      border-radius: 0.25em;
++    }
++
++    #device-change {
++      font-size: 1.0em;
++      padding: 0.6em 1.0em;
++      border: 0;
++      border-radius: 0.25em;
++      color: #fff;
++      background-color: #2962ff;
++    }
++
++    #device-change:disabled {
++      background-color: #bbdefb;
++    }
++  </style>
++</head>
++<body>
++  <h1>AudioContext.setSinkId() Manual Test</h1>
++    <div id="appView">
++      <div id="log"></div>
++      <div class="row">
++        <div id="inspector"></div>
++      </div>
++      <div class="row">
++        <select id="device-dropdown" disabled>
++          <option value="">Getting device information...</option>
++        </select>
++        <button id="device-change" disabled>CHANGE</button>
++      </div>
++    </div>
++  <script type="text/javascript">
++    // Handles the button click to activate `setSinkId()` method.
++    const onDeviceChange = async (event, audioContext, appView) => {
++      const deviceId = appView.dropdown.value;
++      if (deviceId === 'default') {
++        audioContext.setSinkId('');
++      } else if (deviceId === 'silent') {
++        audioContext.setSinkId({type: 'none'});
++      } else {
++        audioContext.setSinkId(deviceId);
++      }
++
++      appView.inspector.textContent = typeof audioContext.sinkId === 'object'
++          ? `AudioContext.sinkId = ${JSON.stringify(audioContext.sinkId)}`
++          : `AudioContext.sinkId = '${audioContext.sinkId}'`
++    };
++
++    // The manual test body
++    const startManuaTestApp = async () => {
++      const appView = {
++        log: document.getElementById('log'),
++        inspector: document.getElementById('inspector'),
++        dropdown: document.getElementById('device-dropdown'),
++        changeButton: document.getElementById('device-change')
++      };
++
++      const audioContext = new AudioContext();
++      const osc = new OscillatorNode(audioContext);
++      const amp = new GainNode(audioContext, {gain: 0.25});
++      osc.connect(amp).connect(audioContext.destination);
++      osc.start();
++
++      if (typeof audioContext.setSinkId !== 'function' ||
++          typeof audioContext.sinkId != 'string') {
++        appView.log.textContent =
++            'This browser does not support AudioContext.setSinkId()';
++        return;
++      }
++
++      appView.inspector.textContent =
++          `AudioContext.sinkId = '${audioContext.sinkId}'`;
++
++      // Get a permission, enumerate devices, and set up the UI.
++      try {
++        const stream =
++            await navigator.mediaDevices.getUserMedia({ audio: true });
++        if (stream) {
++          const deviceList = await navigator.mediaDevices.enumerateDevices();
++          let deviceListString = '';
++          deviceList.forEach((device) => {
++            if (device.kind === 'audiooutput') {
++              deviceListString +=
++                  `<option value="${device.deviceId}">${device.label}</option>`;
++            }
++          });
++          deviceListString +=
++              `<option value="silent">none (silent output)</option>`;
++          appView.dropdown.innerHTML = deviceListString;
++          appView.changeButton.addEventListener('click', (event) => {
++            audioContext.resume();
++            onDeviceChange(event, audioContext, appView);
++          });
++          appView.dropdown.disabled = false;
++          appView.changeButton.disabled = false;
++          appView.log.textContent =
++              'Device information successfully retrieved. The test is ready.';
++        } else {
++          appView.log.textContent =
++              'navigator.mediaDevices.getUserMedia() failed.';
++        }
++      } catch (error) {
++        // The permission dialog was dismissed, or acquiring a stream from
++        // getUserMedia() failed.
++        console.error(error);
++        appView.log.textContent = `The initialization failed: ${error}`;
++      }
++    };
++
++    // Entry point
++    window.addEventListener('load', startManuaTestApp);
++  </script>
++</body>
++</html>
+\ No newline at end of file
+diff --git a/third_party/blink/public/BUILD.gn b/third_party/blink/public/BUILD.gn
+index d7f08212f8a7da86b42ee73c56a33dcbbac5affe..54132294698fd49413307e7052ff74639829e692 100644
+--- a/third_party/blink/public/BUILD.gn
++++ b/third_party/blink/public/BUILD.gn
+@@ -166,6 +166,7 @@ source_set("blink_headers") {
+     "platform/web_audio_bus.h",
+     "platform/web_audio_device.h",
+     "platform/web_audio_latency_hint.h",
++    "platform/web_audio_sink_descriptor.h",
+     "platform/web_audio_source_provider.h",
+     "platform/web_back_forward_cache_loader_helper.h",
+     "platform/web_blob_info.h",
+diff --git a/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom b/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
+index 180bb73f7ccd01c34717580cae97b7542a39a69d..704c15ba1570a0084a7a3955ded223f691a3027b 100644
+--- a/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
++++ b/third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom
+@@ -3660,6 +3660,9 @@ enum WebFeature {
+   //+by xxlang : mask id
+   kMediaStreamConstraintsMaskIdVideo = 4337,
+ 
++  kAudioContextSinkId = 4349,
++  kAudioContextSetSinkId = 4350,
++
+   // Add new features immediately above this line. Don't change assigned
+   // numbers of any item, and don't reuse removed slots.
+   // Also, run update_use_counter_feature_enum.py in
+diff --git a/third_party/blink/public/platform/platform.h b/third_party/blink/public/platform/platform.h
+index 765c0882406fa0ab7ae3d0460ff9a9814f60db0a..51cfd4c2ebeffa1c0a9296d3342fc6e24eb4d75b 100644
+--- a/third_party/blink/public/platform/platform.h
++++ b/third_party/blink/public/platform/platform.h
+@@ -118,6 +118,7 @@ class URLLoaderThrottle;
+ class UserMetricsAction;
+ class WebAudioBus;
+ class WebAudioLatencyHint;
++class WebAudioSinkDescriptor;
+ class WebCrypto;
+ class WebDedicatedWorker;
+ class WebDedicatedWorkerHostFactoryClient;
+@@ -202,6 +203,7 @@ class BLINK_PLATFORM_EXPORT Platform {
+ 
+   // Creates an audio output device platform interface for Web Audio API.
+   virtual std::unique_ptr<WebAudioDevice> CreateAudioDevice(
++      const WebAudioSinkDescriptor& sink_descriptor,
+       unsigned number_of_output_channels,
+       const WebAudioLatencyHint& latency_hint,
+       WebAudioDevice::RenderCallback*) {
+diff --git a/third_party/blink/public/platform/web_audio_sink_descriptor.h b/third_party/blink/public/platform/web_audio_sink_descriptor.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..43fb395da7ddc101ffb6a10eb2795dd7112c0f09
+--- /dev/null
++++ b/third_party/blink/public/platform/web_audio_sink_descriptor.h
+@@ -0,0 +1,57 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_AUDIO_SINK_DESCRIPTOR_H_
++#define THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_AUDIO_SINK_DESCRIPTOR_H_
++
++#include "base/check_op.h"
++#include "base/notreached.h"
++#include "third_party/blink/public/common/tokens/tokens.h"
++#include "third_party/blink/public/platform/web_string.h"
++
++namespace blink {
++
++// This descriptor object must be created after proper validation of |sink_id|
++// in AudioContext. This object is created by AudioContext in blink, and
++// consumed by RendererWebAudioDeviceImpl in media. Note that this class does
++// NOT do the vailidation of an identifier.
++class WebAudioSinkDescriptor {
++ public:
++  enum AudioSinkType {
++    // A sink type that produces actual sound via a physical audio device.
++    kAudible,
++    // A sink type that is driven by a fake audio device. (e.g. worker thread)
++    kSilent,
++    kLastValue = kSilent
++  };
++
++  WebAudioSinkDescriptor() = default;
++
++  // For an "audible" sink with a user-selected identifier. The empty string
++  // on |sink_id| means the system's default audio device.
++  explicit WebAudioSinkDescriptor(const WebString& sink_id,
++                                  const LocalFrameToken& token)
++      : type_(kAudible), sink_id_(sink_id), token_(token) {}
++
++  // For a "silent" sink.
++  explicit WebAudioSinkDescriptor(const LocalFrameToken& token)
++      : type_(kSilent), token_(token) {}
++
++  const LocalFrameToken& Token() const { return token_; }
++  AudioSinkType Type() const { return type_; }
++  WebString SinkId() const { return sink_id_; }
++
++  bool operator==(const WebAudioSinkDescriptor& rhs) const {
++    return this->Type() == rhs.Type() && this->SinkId() == rhs.SinkId();
++  }
++
++ private:
++  AudioSinkType type_;
++  WebString sink_id_;
++  LocalFrameToken token_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_PUBLIC_PLATFORM_WEB_AUDIO_SINK_DESCRIPTOR_H_
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index 9a957c01b1f59775290a5a15b6bef292e2ef1d5a..dcaf59997b8c049e6cc2bb1bf7e89045d66711de 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -153,6 +153,8 @@ generated_dictionary_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_param_descriptor.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_processing_event_init.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_processing_event_init.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_options.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_options.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_timestamp.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_timestamp.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_worklet_node_options.cc",
+@@ -1042,6 +1044,8 @@ generated_enumeration_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_playback_destination.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sample_format.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sample_format.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_type.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_type.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_avc_bitstream_format.cc",
+@@ -1495,6 +1499,8 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_processing_event.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_scheduled_source_node.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_scheduled_source_node.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_info.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_sink_info.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_track.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_track.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_audio_worklet.cc",
+@@ -2601,6 +2607,10 @@ generated_union_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_arraybuffer_gpubuffer.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiocontextlatencycategory_double.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiocontextlatencycategory_double.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkinfo_string.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkinfo_string.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkoptions_string.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkoptions_string.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_blob_htmlcanvaselement_htmlimageelement_htmlvideoelement_imagebitmap_imagedata_offscreencanvas_svgimageelement_videoframe.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_blob_htmlcanvaselement_htmlimageelement_htmlvideoelement_imagebitmap_imagedata_offscreencanvas_svgimageelement_videoframe.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_union_boolean_constrainbooleanparameters.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index bf50224d3714b204687c95bde07c853d86552df5..1c08df73317010d36ae4b4d571d86472727330dd 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -772,6 +772,7 @@ static_idl_files_in_modules = get_path_info(
+           "//third_party/blink/renderer/modules/webaudio/audio_processing_event.idl",
+           "//third_party/blink/renderer/modules/webaudio/audio_processing_event_init.idl",
+           "//third_party/blink/renderer/modules/webaudio/audio_scheduled_source_node.idl",
++          "//third_party/blink/renderer/modules/webaudio/audio_sink_info.idl",
+           "//third_party/blink/renderer/modules/webaudio/audio_timestamp.idl",
+           "//third_party/blink/renderer/modules/webaudio/audio_worklet.idl",
+           "//third_party/blink/renderer/modules/webaudio/audio_worklet_global_scope.idl",
+diff --git a/third_party/blink/renderer/core/events/event_type_names.json5 b/third_party/blink/renderer/core/events/event_type_names.json5
+index 141eb19dec160403eb4b158d0e62d38874901a32..cf82be9a6740031f643cfa1b61d5cdbb6d136e5a 100644
+--- a/third_party/blink/renderer/core/events/event_type_names.json5
++++ b/third_party/blink/renderer/core/events/event_type_names.json5
+@@ -276,6 +276,7 @@
+     "shippingoptionchange",
+     "show",
+     "signalingstatechange",
++    "sinkchange",
+     "slotchange",
+     "soundend",
+     "soundstart",
+diff --git a/third_party/blink/renderer/modules/webaudio/BUILD.gn b/third_party/blink/renderer/modules/webaudio/BUILD.gn
+index bf046d4f3b2b2594d6b3e3648c30c24b2397f52a..2d2d43e3e90df752e768b9a6059e8dd188df945d 100644
+--- a/third_party/blink/renderer/modules/webaudio/BUILD.gn
++++ b/third_party/blink/renderer/modules/webaudio/BUILD.gn
+@@ -58,6 +58,8 @@ blink_modules_sources("webaudio") {
+     "audio_scheduled_source_handler.h",
+     "audio_scheduled_source_node.cc",
+     "audio_scheduled_source_node.h",
++    "audio_sink_info.cc",
++    "audio_sink_info.h",
+     "audio_summing_junction.cc",
+     "audio_summing_junction.h",
+     "audio_worklet.cc",
+@@ -180,6 +182,8 @@ blink_modules_sources("webaudio") {
+     "script_processor_node.h",
+     "semi_realtime_audio_worklet_thread.cc",
+     "semi_realtime_audio_worklet_thread.h",
++    "setsinkid_resolver.cc",
++    "setsinkid_resolver.h",
+     "stereo_panner_handler.cc",
+     "stereo_panner_handler.h",
+     "stereo_panner_node.cc",
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+index f930f6d7056f79aadea05a2aae7cd64ead4667ef..79ab1f1dde93ab8cd39db7445a0df74e71c2e94b 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+@@ -1,4 +1,4 @@
+-// Copyright 2015 The Chromium Authors. All rights reserved.
++// Copyright 2015 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -10,13 +10,13 @@
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "services/metrics/public/cpp/ukm_recorder.h"
+ #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
++#include "third_party/blink/public/common/mediastream/media_devices.h"
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_context_options.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_timestamp.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_union_audiocontextlatencycategory_double.h"
+-#include "third_party/blink/renderer/core/dom/dom_exception.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+@@ -27,6 +27,7 @@
+ #include "third_party/blink/renderer/modules/mediastream/media_stream.h"
+ #include "third_party/blink/renderer/modules/permissions/permission_utils.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
++#include "third_party/blink/renderer/modules/webaudio/audio_sink_info.h"
+ #include "third_party/blink/renderer/modules/webaudio/media_element_audio_source_node.h"
+ #include "third_party/blink/renderer/modules/webaudio/media_stream_audio_destination_node.h"
+ #include "third_party/blink/renderer/modules/webaudio/media_stream_audio_source_node.h"
+@@ -112,6 +113,8 @@ bool IsAudible(const AudioBus* rendered_data) {
+   return energy > 0;
+ }
+ 
++using blink::SetSinkIdResolver;
++
+ }  // namespace
+ 
+ AudioContext* AudioContext::Create(Document& document,
+@@ -157,6 +160,20 @@ AudioContext* AudioContext::Create(Document& document,
+     sample_rate = context_options->sampleRate();
+   }
+ 
++  // The empty string means the default audio device.
++  auto frame_token = document.domWindow()->GetLocalFrameToken();
++  WebAudioSinkDescriptor sink_descriptor(String(""), frame_token);
++
++  if (document.domWindow()->IsSecureContext() && context_options->hasSinkId()) {
++    if (context_options->sinkId()->IsString()) {
++      sink_descriptor = WebAudioSinkDescriptor(
++          context_options->sinkId()->GetAsString(), frame_token);
++    } else {
++      // Create a descriptor that represents a silent sink device.
++      sink_descriptor = WebAudioSinkDescriptor(frame_token);
++    }
++  }
++
+   // Validate options before trying to construct the actual context.
+   if (sample_rate.has_value() &&
+       !audio_utilities::IsValidAudioBufferSampleRate(sample_rate.value())) {
+@@ -172,8 +189,8 @@ AudioContext* AudioContext::Create(Document& document,
+   }
+ 
+   SCOPED_UMA_HISTOGRAM_TIMER("WebAudio.AudioContext.CreateTime");
+-  AudioContext* audio_context =
+-      MakeGarbageCollected<AudioContext>(document, latency_hint, sample_rate);
++  AudioContext* audio_context = MakeGarbageCollected<AudioContext>(
++      document, latency_hint, sample_rate, sink_descriptor);
+   ++hardware_context_count;
+   audio_context->UpdateStateIfNeeded();
+ 
+@@ -205,15 +222,22 @@ AudioContext* AudioContext::Create(Document& document,
+ 
+ AudioContext::AudioContext(Document& document,
+                            const WebAudioLatencyHint& latency_hint,
+-                           absl::optional<float> sample_rate)
++                           absl::optional<float> sample_rate,
++                           WebAudioSinkDescriptor sink_descriptor)
+     : BaseAudioContext(&document, kRealtimeContext),
+       context_id_(context_id++),
+       audio_context_manager_(document.GetExecutionContext()),
+       permission_service_(document.GetExecutionContext()),
+-      permission_receiver_(this, document.GetExecutionContext()) {
++      permission_receiver_(this, document.GetExecutionContext()),
++      sink_descriptor_(sink_descriptor),
++      v8_sink_id_(
++          MakeGarbageCollected<V8UnionAudioSinkInfoOrString>(String(""))),
++      media_device_service_(document.GetExecutionContext()),
++      media_device_service_receiver_(this, document.GetExecutionContext()) {
+   SendLogMessage(GetAudioContextLogString(latency_hint, sample_rate));
+-  destination_node_ =
+-      RealtimeAudioDestinationNode::Create(this, latency_hint, sample_rate);
++
++  destination_node_ = RealtimeAudioDestinationNode::Create(
++      this, sink_descriptor_, latency_hint, sample_rate);
+ 
+   switch (GetAutoplayPolicy()) {
+     case AutoplayPolicy::Type::kNoUserGestureRequired:
+@@ -260,8 +284,20 @@ AudioContext::AudioContext(Document& document,
+           execution_context->GetTaskRunner(TaskType::kPermission)));
+   permission_service_->HasPermission(
+       CreatePermissionDescriptor(microphone_permission_name),
+-      WTF::Bind(&AudioContext::DidInitialPermissionCheck, WrapPersistent(this),
+-                CreatePermissionDescriptor(microphone_permission_name)));
++      WTF::Bind(&AudioContext::DidInitialPermissionCheck,
++                    WrapPersistent(this),
++                    CreatePermissionDescriptor(microphone_permission_name)));
++
++  // Initializes MediaDeviceService and `output_device_ids_` only for a valid
++  // device identifier that is not the default sink or a silent sink.
++  if (sink_descriptor_.Type() ==
++          WebAudioSinkDescriptor::AudioSinkType::kAudible &&
++      !sink_descriptor_.SinkId().IsEmpty()) {
++    InitializeMediaDeviceService();
++  }
++
++  // Initializes `v8_sink_id_` with the given `sink_descriptor_`.
++  UpdateV8SinkId();
+ }
+ 
+ void AudioContext::Uninitialize() {
+@@ -272,6 +308,7 @@ void AudioContext::Uninitialize() {
+   StopRendering();
+   DidClose();
+   RecordAutoplayMetrics();
++  UninitializeMediaDeviceService();
+   BaseAudioContext::Uninitialize();
+ }
+ 
+@@ -293,6 +330,10 @@ void AudioContext::Trace(Visitor* visitor) const {
+   visitor->Trace(audio_context_manager_);
+   visitor->Trace(permission_service_);
+   visitor->Trace(permission_receiver_);
++  visitor->Trace(set_sink_id_resolvers_);
++  visitor->Trace(media_device_service_);
++  visitor->Trace(media_device_service_receiver_);
++  visitor->Trace(v8_sink_id_);
+   BaseAudioContext::Trace(visitor);
+ }
+ 
+@@ -450,6 +491,14 @@ void AudioContext::DidClose() {
+   if (close_resolver_) {
+     close_resolver_->Resolve();
+   }
++
++  // Reject all pending resolvers for setSinkId() before closing AudioContext.
++  for (auto& set_sink_id_resolver : set_sink_id_resolvers_) {
++    set_sink_id_resolver->RejectWithDOMException(
++        DOMExceptionCode::kInvalidStateError,
++        "Cannot resolve pending promise from setSinkId(), AudioContext is "
++        "going away");
++  }
+ }
+ 
+ bool AudioContext::IsContextCleared() const {
+@@ -510,6 +559,37 @@ double AudioContext::outputLatency() const {
+   return std::round(output_position_.hardware_output_latency / factor) * factor;
+ }
+ 
++ScriptPromise AudioContext::setSinkId(
++    ScriptState* script_state,
++    const V8UnionAudioSinkOptionsOrString* v8_sink_id,
++    ExceptionState& exception_state) {
++  DCHECK(IsMainThread());
++
++  SetSinkIdResolver* resolver =
++      SetSinkIdResolver::Create(script_state, *this, *v8_sink_id);
++  ScriptPromise promise = resolver->Promise();
++
++  if (ContextState() == kClosed) {
++    resolver->Reject();
++    return promise;
++  }
++
++  set_sink_id_resolvers_.push_back(resolver);
++
++  // Lazily initializes MediaDeviceService upon setSinkId() call.
++  if (!is_media_device_service_initialized_) {
++    InitializeMediaDeviceService();
++  } else {
++    // MediaDeviceService is initialized, so we can start a resolver if it is
++    // the only request in the queue.
++    if (set_sink_id_resolvers_.size() == 1) {
++      resolver->Start();
++    }
++  }
++
++  return promise;
++}
++
+ MediaElementAudioSourceNode* AudioContext::createMediaElementSource(
+     HTMLMediaElement* media_element,
+     ExceptionState& exception_state) {
+@@ -821,7 +901,7 @@ void AudioContext::EnsureAudioContextManagerService() {
+ 
+   audio_context_manager_.set_disconnect_handler(
+       WTF::Bind(&AudioContext::OnAudioContextManagerServiceConnectionError,
+-                WrapWeakPersistent(this)));
++                    WrapWeakPersistent(this)));
+ }
+ 
+ void AudioContext::OnAudioContextManagerServiceConnectionError() {
+@@ -883,4 +963,121 @@ double AudioContext::GetOutputLatencyQuantizingFactor() const {
+       : kOutputLatencyQuatizingFactor;
+ }
+ 
++void AudioContext::NotifySetSinkIdIsDone(
++    WebAudioSinkDescriptor pending_sink_descriptor) {
++  sink_descriptor_ = pending_sink_descriptor;
++  UpdateV8SinkId();
++  DispatchEvent(*Event::Create(event_type_names::kSinkchange));
++}
++
++void AudioContext::InitializeMediaDeviceService() {
++  auto* execution_context = GetExecutionContext();
++
++  execution_context->GetBrowserInterfaceBroker().GetInterface(
++      media_device_service_.BindNewPipeAndPassReceiver(
++          execution_context->GetTaskRunner(TaskType::kInternalMediaRealTime)));
++
++  media_device_service_->AddMediaDevicesListener(
++      /* audio input */ true,
++      /* video input */ false,
++      /* audio output */ true,
++      media_device_service_receiver_.BindNewPipeAndPassRemote(
++          execution_context->GetTaskRunner(TaskType::kInternalMediaRealTime)));
++
++  is_media_device_service_initialized_ = true;
++
++  media_device_service_->EnumerateDevices(
++      /* audio input */ false,
++      /* video input */ false,
++      /* audio output */ true,
++      /* request_video_input_capabilities */ false,
++      /* request_audio_input_capabilities */ false,
++      WTF::Bind(&AudioContext::DevicesEnumerated,
++                    WrapWeakPersistent(this)));
++}
++
++void AudioContext::DevicesEnumerated(
++    const Vector<Vector<WebMediaDeviceInfo>>& enumeration,
++    Vector<mojom::blink::VideoInputDeviceCapabilitiesPtr>
++        video_input_capabilities,
++    Vector<mojom::blink::AudioInputDeviceCapabilitiesPtr>
++        audio_input_capabilities) {
++  Vector<WebMediaDeviceInfo> output_devices =
++      enumeration[static_cast<wtf_size_t>(
++          mojom::blink::MediaDeviceType::MEDIA_AUDIO_OUTPUT)];
++
++  OnDevicesChanged(mojom::blink::MediaDeviceType::MEDIA_AUDIO_OUTPUT,
++                   output_devices);
++
++  // Start the first resolver in the queue once `output_device_ids_` is
++  // initialized from `OnDeviceChanged()` above.
++  if (!set_sink_id_resolvers_.empty()) {
++    set_sink_id_resolvers_.front()->Start();
++  }
++}
++
++void AudioContext::OnDevicesChanged(mojom::blink::MediaDeviceType device_type,
++                                    const Vector<WebMediaDeviceInfo>& devices) {
++  if (device_type == mojom::blink::MediaDeviceType::MEDIA_AUDIO_OUTPUT) {
++    output_device_ids_.clear();
++    for (auto device : devices) {
++      if (device.device_id == "default") {
++        // Use the empty string to represent the default audio sink.
++        output_device_ids_.insert(String(""));
++      } else {
++        output_device_ids_.insert(String::FromUTF8(device.device_id));
++      }
++    }
++  }
++
++  // On some platforms, unplugging the current audio device doesn't
++  // automatically fallback to the default audio device. When the current
++  // `sink_descriptor_` becomes invalid here, we need to manually call
++  // `SetSinkDescriptor()` to fallback to the default audio output
++  // device to keep the audio playing.
++  if (!IsValidSinkDescriptor(sink_descriptor_)) {
++    GetExecutionContext()->AddConsoleMessage(
++        MakeGarbageCollected<ConsoleMessage>(
++            mojom::ConsoleMessageSource::kOther,
++            mojom::ConsoleMessageLevel::kInfo,
++            "AudioContext: Fallback to default device due to audio device "
++            "changed."));
++    sink_descriptor_ = WebAudioSinkDescriptor(
++        String(""),
++        To<LocalDOMWindow>(GetExecutionContext())->GetLocalFrameToken());
++    auto* destination_node = destination();
++    if (destination_node) {
++      static_cast<RealtimeAudioDestinationNode*>(destination_node)
++          ->SetSinkDescriptor(sink_descriptor_, base::DoNothing());
++    }
++    UpdateV8SinkId();
++  }
++}
++
++void AudioContext::UninitializeMediaDeviceService() {
++  if (media_device_service_.is_bound()) {
++    media_device_service_.reset();
++  }
++  if (media_device_service_receiver_.is_bound()) {
++    media_device_service_receiver_.reset();
++  }
++  output_device_ids_.clear();
++}
++
++void AudioContext::UpdateV8SinkId() {
++  if (sink_descriptor_.Type() ==
++      WebAudioSinkDescriptor::AudioSinkType::kSilent) {
++    v8_sink_id_->Set(AudioSinkInfo::Create(String("none")));
++  } else {
++    v8_sink_id_->Set(sink_descriptor_.SinkId());
++  }
++}
++
++bool AudioContext::IsValidSinkDescriptor(
++    const WebAudioSinkDescriptor& sink_descriptor) {
++  return sink_descriptor.Type() ==
++             WebAudioSinkDescriptor::AudioSinkType::kSilent ||
++         output_device_ids_.Contains(sink_descriptor.SinkId());
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.h b/third_party/blink/renderer/modules/webaudio/audio_context.h
+index 620a1683bf4a8b57fd64995652b836cf0ba8e567..1a8df377e46f80e3a8b0087d5ba337eb0d6b5784 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.h
+@@ -1,22 +1,27 @@
+-// Copyright 2015 The Chromium Authors. All rights reserved.
++// Copyright 2015 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+ #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_CONTEXT_H_
+ #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_CONTEXT_H_
+ 
++#include "third_party/blink/public/mojom/mediastream/media_devices.mojom-blink.h"
+ #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+ #include "third_party/blink/public/mojom/webaudio/audio_context_manager.mojom-blink.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_context_options.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkinfo_string.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkoptions_string.h"
+ #include "third_party/blink/renderer/core/html/media/autoplay_policy.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
++#include "third_party/blink/renderer/modules/webaudio/setsinkid_resolver.h"
++#include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+ #include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
+ #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
+ #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
+-#include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
+ #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+ 
+ namespace blink {
+@@ -36,7 +41,8 @@ class WebAudioLatencyHint;
+ // This is an BaseAudioContext which actually plays sound, unlike an
+ // OfflineAudioContext which renders sound into a buffer.
+ class MODULES_EXPORT AudioContext : public BaseAudioContext,
+-                                    public mojom::blink::PermissionObserver {
++                                    public mojom::blink::PermissionObserver,
++                                    public mojom::blink::MediaDevicesListener {
+   DEFINE_WRAPPERTYPEINFO();
+ 
+  public:
+@@ -46,8 +52,12 @@ class MODULES_EXPORT AudioContext : public BaseAudioContext,
+ 
+   AudioContext(Document&,
+                const WebAudioLatencyHint&,
+-               absl::optional<float> sample_rate);
++               absl::optional<float> sample_rate,
++               WebAudioSinkDescriptor sink_descriptor);
+   ~AudioContext() override;
++
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(sinkchange, kSinkchange)
++
+   void Trace(Visitor*) const override;
+ 
+   // For ContextLifeCycleObserver
+@@ -95,12 +105,35 @@ class MODULES_EXPORT AudioContext : public BaseAudioContext,
+   // mojom::blink::PermissionObserver
+   void OnPermissionStatusChange(mojom::blink::PermissionStatus) override;
+ 
++  Member<V8UnionAudioSinkInfoOrString> sinkId() const { return v8_sink_id_; }
++
++  WebAudioSinkDescriptor GetSinkDescriptor() const { return sink_descriptor_; }
++
++  ScriptPromise setSinkId(ScriptState*,
++                          const V8UnionAudioSinkOptionsOrString*,
++                          ExceptionState&);
++
++  void NotifySetSinkIdIsDone(WebAudioSinkDescriptor);
++
++  HeapDeque<Member<SetSinkIdResolver>>& GetSetSinkIdResolver() {
++    return set_sink_id_resolvers_;
++  }
++
++  // mojom::blink::MediaDevicesListener
++  void OnDevicesChanged(mojom::blink::MediaDeviceType,
++                        const Vector<WebMediaDeviceInfo>&) override;
++
++  // A helper function to validate the given sink descriptor. See:
++  // webaudio.github.io/web-audio-api/#validating-sink-identifier
++  bool IsValidSinkDescriptor(const WebAudioSinkDescriptor&);
++
+  protected:
+   void Uninitialize() final;
+ 
+  private:
+   friend class AudioContextAutoplayTest;
+   friend class AudioContextTest;
++  FRIEND_TEST_ALL_PREFIXES(AudioContextTest, MediaDevicesService);
+ 
+   // These values are persisted to logs. Entries should not be renumbered and
+   // numeric values should never be reused.
+@@ -178,6 +211,20 @@ class MODULES_EXPORT AudioContext : public BaseAudioContext,
+                                  mojom::blink::PermissionStatus);
+   double GetOutputLatencyQuantizingFactor() const;
+ 
++  void InitializeMediaDeviceService();
++  void UninitializeMediaDeviceService();
++
++  // Callback from blink::mojom::MediaDevicesDispatcherHost::EnumerateDevices().
++  void DevicesEnumerated(const Vector<Vector<WebMediaDeviceInfo>>& enumeration,
++                         Vector<mojom::blink::VideoInputDeviceCapabilitiesPtr>
++                             video_input_capabilities,
++                         Vector<mojom::blink::AudioInputDeviceCapabilitiesPtr>
++                             audio_input_capabilities);
++
++  // A helper function used to update `v8_sink_id_` whenever `sink_id_` is
++  // updated.
++  void UpdateV8SinkId();
++
+   unsigned context_id_;
+   Member<ScriptPromiseResolver> close_resolver_;
+ 
+@@ -228,6 +275,29 @@ class MODULES_EXPORT AudioContext : public BaseAudioContext,
+   HeapMojoRemote<mojom::blink::PermissionService> permission_service_;
+   HeapMojoReceiver<mojom::blink::PermissionObserver, AudioContext>
+       permission_receiver_;
++
++  // Describes the current audio output device.
++  WebAudioSinkDescriptor sink_descriptor_;
++
++  // A V8 return value from `AudioContext.sinkId` getter. It gets updated when
++  // `sink_descriptor_` above is updated.
++  Member<V8UnionAudioSinkInfoOrString> v8_sink_id_;
++
++  // A queue for setSinkId() Promise resolvers. Requests are handled in the
++  // order it was received and only one request is handled at a time.
++  HeapDeque<Member<SetSinkIdResolver>> set_sink_id_resolvers_;
++
++  // MediaDeviceService for querying device information, and the associated
++  // receiver for getting notification.
++  HeapMojoRemote<mojom::blink::MediaDevicesDispatcherHost>
++      media_device_service_;
++  HeapMojoReceiver<mojom::blink::MediaDevicesListener, AudioContext>
++      media_device_service_receiver_;
++
++  bool is_media_device_service_initialized_ = false;
++
++  // Stores a list of identifiers for output device.
++  HashSet<String> output_device_ids_;
+ };
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.idl b/third_party/blink/renderer/modules/webaudio/audio_context.idl
+index a614c1e229015d8c67cdab102d4a391e36caa54d..5e94e906a201c131d85e4bc7712e9b022a1b6f88 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.idl
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.idl
+@@ -30,6 +30,10 @@ enum AudioContextLatencyCategory {
+     "playback"
+ };
+ 
++dictionary AudioSinkOptions {
++  required AudioSinkType type;
++};
++
+ // https://webaudio.github.io/web-audio-api/#AudioContext
+ [
+     Exposed=Window,
+@@ -52,4 +56,7 @@ enum AudioContextLatencyCategory {
+     [RaisesException, MeasureAs=AudioContextCreateMediaStreamSource] MediaStreamAudioSourceNode createMediaStreamSource(MediaStream mediaStream);
+     [RaisesException, MeasureAs=AudioContextCreateMediaStreamDestination] MediaStreamAudioDestinationNode createMediaStreamDestination();
+ 
++    [MeasureAs=AudioContextSinkId, SecureContext] readonly attribute (DOMString or AudioSinkInfo) sinkId;
++    [MeasureAs=AudioContextSetSinkId, RaisesException, CallWith=ScriptState, SecureContext] Promise<void> setSinkId((DOMString or AudioSinkOptions) sinkId);
++    [SecureContext] attribute EventHandler onsinkchange;
+ };
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context_autoplay_test.cc b/third_party/blink/renderer/modules/webaudio/audio_context_autoplay_test.cc
+index ec1313bfda149262ee91b90213b16776639c87cd..cf2005fecb495920b67f8ca9289b45e54ec091d8 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context_autoplay_test.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context_autoplay_test.cc
+@@ -1,4 +1,4 @@
+-// Copyright 2016 The Chromium Authors. All rights reserved.
++// Copyright 2016 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -11,6 +11,7 @@
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/platform/web_audio_device.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_context_options.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -54,6 +55,7 @@ class MockWebAudioDeviceForAutoplayTest : public WebAudioDevice {
+ class AudioContextAutoplayTestPlatform : public TestingPlatformSupport {
+  public:
+   std::unique_ptr<WebAudioDevice> CreateAudioDevice(
++      const WebAudioSinkDescriptor& sink_descriptor,
+       unsigned number_of_output_channels,
+       const WebAudioLatencyHint& latency_hint,
+       WebAudioDevice::RenderCallback*) override {
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context_options.idl b/third_party/blink/renderer/modules/webaudio/audio_context_options.idl
+index 68c281af40fefa27536ca4a8544cd7aa30af9f45..61113631a56aea8bad3f9920f594009901e8863a 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context_options.idl
++++ b/third_party/blink/renderer/modules/webaudio/audio_context_options.idl
+@@ -9,4 +9,5 @@ dictionary AudioContextOptions {
+     // AudioContext.baseLatency).
+     (AudioContextLatencyCategory or double) latencyHint = "interactive";
+     float sampleRate;
++    (DOMString or AudioSinkOptions) sinkId;
+ };
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context_test.cc b/third_party/blink/renderer/modules/webaudio/audio_context_test.cc
+index 78eacf6fdc5bfa72c0bdbb47c97c5130d951f2ec..38a061d0e09e9158ec33a7987d3bf0bc49d1e3c9 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context_test.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context_test.cc
+@@ -1,4 +1,4 @@
+-// Copyright 2017 The Chromium Authors. All rights reserved.
++// Copyright 2017 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -11,6 +11,7 @@
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink.h"
+ #include "third_party/blink/public/platform/web_audio_device.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_union_audiocontextlatencycategory_double.h"
+ #include "third_party/blink/renderer/core/core_initializer.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -48,6 +49,7 @@ class MockWebAudioDeviceForAudioContext : public WebAudioDevice {
+ class AudioContextTestPlatform : public TestingPlatformSupport {
+  public:
+   std::unique_ptr<WebAudioDevice> CreateAudioDevice(
++      const WebAudioSinkDescriptor& sink_descriptor,
+       unsigned number_of_output_channels,
+       const WebAudioLatencyHint& latency_hint,
+       WebAudioDevice::RenderCallback*) override {
+@@ -199,4 +201,18 @@ TEST_F(AudioContextTest, ExecutionContextPaused) {
+   EXPECT_FALSE(web_audio_device_paused_);
+ }
+ 
++// Test initialization/uninitialization of MediaDeviceService.
++TEST_F(AudioContextTest, MediaDevicesService) {
++  AudioContextOptions* options = AudioContextOptions::Create();
++  AudioContext* audio_context =
++      AudioContext::Create(GetDocument(), options, ASSERT_NO_EXCEPTION);
++
++  EXPECT_FALSE(audio_context->is_media_device_service_initialized_);
++  audio_context->InitializeMediaDeviceService();
++  EXPECT_TRUE(audio_context->is_media_device_service_initialized_);
++  audio_context->UninitializeMediaDeviceService();
++  EXPECT_FALSE(audio_context->media_device_service_.is_bound());
++  EXPECT_FALSE(audio_context->media_device_service_receiver_.is_bound());
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_destination_node.h b/third_party/blink/renderer/modules/webaudio/audio_destination_node.h
+index 1d6cfcd5744bb9ea03dec5e97145462ee3a221be..ef7e96d02370b476bbceff333fa74a48bcaaa9f4 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_destination_node.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_destination_node.h
+@@ -26,6 +26,7 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_DESTINATION_NODE_H_
+ #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_DESTINATION_NODE_H_
+ 
++#include "media/base/output_device_info.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_destination_handler.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_sink_info.cc b/third_party/blink/renderer/modules/webaudio/audio_sink_info.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..60e8690579b61ef6bd78fc4e6d0c90a97e4abec8
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webaudio/audio_sink_info.cc
+@@ -0,0 +1,22 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/modules/webaudio/audio_sink_info.h"
++
++namespace blink {
++
++AudioSinkInfo* AudioSinkInfo::Create(const String& type) {
++  return MakeGarbageCollected<AudioSinkInfo>(type);
++}
++
++AudioSinkInfo::AudioSinkInfo(const String& type) {}
++
++AudioSinkInfo::~AudioSinkInfo() = default;
++
++String AudioSinkInfo::type() const {
++  // Currently "none" is the only `type` available.
++  return "none";
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_sink_info.h b/third_party/blink/renderer/modules/webaudio/audio_sink_info.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6a953722e964c8cdeca252c42751395b2bc59ef
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webaudio/audio_sink_info.h
+@@ -0,0 +1,27 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_SINK_INFO_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_SINK_INFO_H_
++
++#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++
++namespace blink {
++
++class AudioSinkInfo : public ScriptWrappable {
++  DEFINE_WRAPPERTYPEINFO();
++
++ public:
++  static AudioSinkInfo* Create(const String&);
++
++  explicit AudioSinkInfo(const String&);
++  ~AudioSinkInfo() override;
++
++  String type() const;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_SINK_INFO_H_
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_sink_info.idl b/third_party/blink/renderer/modules/webaudio/audio_sink_info.idl
+new file mode 100644
+index 0000000000000000000000000000000000000000..aada4559d79d2f5f8e21f07ad9145adc65910444
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webaudio/audio_sink_info.idl
+@@ -0,0 +1,11 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++enum AudioSinkType {
++  "none"
++};
++
++[Exposed=Window] interface AudioSinkInfo {
++  readonly attribute AudioSinkType type;
++};
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.cc b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.cc
+index c524ec843ff6857b38be416ea06b0eb11bd3727e..f2d215d07b0232354ba1980b7fbe2b3fade382ca 100644
+--- a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.cc
++++ b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.cc
+@@ -7,6 +7,7 @@
+ #include "base/feature_list.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_context.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
+@@ -29,18 +30,23 @@ constexpr unsigned kDefaultNumberOfInputChannels = 2;
+ }  // namespace
+ 
+ scoped_refptr<RealtimeAudioDestinationHandler>
+-RealtimeAudioDestinationHandler::Create(AudioNode& node,
+-                                        const WebAudioLatencyHint& latency_hint,
+-                                        absl::optional<float> sample_rate) {
++RealtimeAudioDestinationHandler::Create(
++    AudioNode& node,
++    const WebAudioSinkDescriptor& sink_descriptor,
++    const WebAudioLatencyHint& latency_hint,
++    absl::optional<float> sample_rate) {
+   return base::AdoptRef(
+-      new RealtimeAudioDestinationHandler(node, latency_hint, sample_rate));
++      new RealtimeAudioDestinationHandler(node, sink_descriptor, latency_hint,
++                                          sample_rate));
+ }
+ 
+ RealtimeAudioDestinationHandler::RealtimeAudioDestinationHandler(
+     AudioNode& node,
++    const WebAudioSinkDescriptor& sink_descriptor,
+     const WebAudioLatencyHint& latency_hint,
+     absl::optional<float> sample_rate)
+     : AudioDestinationHandler(node),
++      sink_descriptor_(sink_descriptor),
+       latency_hint_(latency_hint),
+       sample_rate_(sample_rate),
+       allow_pulling_audio_graph_(false),
+@@ -293,7 +299,7 @@ int RealtimeAudioDestinationHandler::GetFramesPerBuffer() const {
+ 
+ void RealtimeAudioDestinationHandler::CreatePlatformDestination() {
+   platform_destination_ = AudioDestination::Create(
+-      *this, ChannelCount(), latency_hint_, sample_rate_,
++      *this, sink_descriptor_, ChannelCount(), latency_hint_, sample_rate_,
+       Context()->GetDeferredTaskHandler().RenderQuantumFrames());
+ }
+ 
+@@ -333,4 +339,19 @@ void RealtimeAudioDestinationHandler::StopPlatformDestination() {
+   }
+ }
+ 
++void RealtimeAudioDestinationHandler::SetSinkDescriptor(
++    const WebAudioSinkDescriptor& sink_descriptor,
++    media::OutputDeviceStatusCB callback) {
++  DCHECK(IsMainThread());
++
++  // Stop the current sink and create a new with the provided sink descriptor.
++  StopPlatformDestination();
++  sink_descriptor_ = sink_descriptor;
++  CreatePlatformDestination();
++  StartPlatformDestination();
++
++  // Currently we assume that the recreation request never fails.
++  std::move(callback).Run(media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_OK);
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h
+index a90d942a64e2a32e5b738c14b5b4f1583b0dc49a..3cd935eb556c706198a48c31d4a2ed59b7ffc9a0 100644
+--- a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h
++++ b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h
+@@ -1,4 +1,4 @@
+-// Copyright 2022 The Chromium Authors. All rights reserved.
++// Copyright 2022 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -10,6 +10,7 @@
+ 
+ #include "base/memory/weak_ptr.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
+ #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
+ #include "third_party/blink/renderer/platform/audio/audio_destination.h"
+@@ -20,6 +21,7 @@ namespace blink {
+ class AudioContext;
+ class ExceptionState;
+ class WebAudioLatencyHint;
++class WebAudioSinkDescriptor;
+ 
+ class RealtimeAudioDestinationHandler final
+     : public AudioDestinationHandler,
+@@ -28,6 +30,7 @@ class RealtimeAudioDestinationHandler final
+  public:
+   static scoped_refptr<RealtimeAudioDestinationHandler> Create(
+       AudioNode&,
++      const WebAudioSinkDescriptor&,
+       const WebAudioLatencyHint&,
+       absl::optional<float> sample_rate);
+   ~RealtimeAudioDestinationHandler() override;
+@@ -71,10 +74,18 @@ class RealtimeAudioDestinationHandler final
+   // Sets the detect silence flag for the platform destination.
+   void SetDetectSilence(bool detect_silence);
+ 
++  // Sets the identifier for a new output device. Note that this will recreate
++  // a new platform destination with the specified sink device. It also invokes
++  // `callback` when the recreation is completed.
++  void SetSinkDescriptor(const WebAudioSinkDescriptor& sink_descriptor,
++                         media::OutputDeviceStatusCB callback);
++
+  private:
+-  explicit RealtimeAudioDestinationHandler(AudioNode&,
+-                                           const WebAudioLatencyHint&,
+-                                           absl::optional<float> sample_rate);
++  explicit RealtimeAudioDestinationHandler(
++      AudioNode&,
++      const WebAudioSinkDescriptor&,
++      const WebAudioLatencyHint&,
++      absl::optional<float> sample_rate);
+ 
+   void CreatePlatformDestination();
+   void StartPlatformDestination();
+@@ -95,6 +106,9 @@ class RealtimeAudioDestinationHandler final
+     allow_pulling_audio_graph_.store(false, std::memory_order_release);
+   }
+ 
++  // Stores a sink descriptor for sink transition.
++  WebAudioSinkDescriptor sink_descriptor_;
++
+   const WebAudioLatencyHint latency_hint_;
+ 
+   // Holds the audio device thread that runs the real time audio context.
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.cc b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.cc
+index 551b06d69b0d630a901ef2c111001efb828d484d..e0766d838fff1b8e70af858e89f225584e2b224e 100644
+--- a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.cc
++++ b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.cc
+@@ -45,19 +45,28 @@ namespace blink {
+ 
+ RealtimeAudioDestinationNode::RealtimeAudioDestinationNode(
+     AudioContext& context,
++    const WebAudioSinkDescriptor& sink_descriptor,
+     const WebAudioLatencyHint& latency_hint,
+     absl::optional<float> sample_rate)
+     : AudioDestinationNode(context) {
+-  SetHandler(RealtimeAudioDestinationHandler::Create(*this, latency_hint,
+-                                                     sample_rate));
++  SetHandler(RealtimeAudioDestinationHandler::Create(
++      *this, sink_descriptor, latency_hint, sample_rate));
+ }
+ 
+ RealtimeAudioDestinationNode* RealtimeAudioDestinationNode::Create(
+     AudioContext* context,
++    const WebAudioSinkDescriptor& sink_descriptor,
+     const WebAudioLatencyHint& latency_hint,
+     absl::optional<float> sample_rate) {
+   return MakeGarbageCollected<RealtimeAudioDestinationNode>(
+-      *context, latency_hint, sample_rate);
++      *context, sink_descriptor, latency_hint, sample_rate);
++}
++
++void RealtimeAudioDestinationNode::SetSinkDescriptor(
++    const WebAudioSinkDescriptor& sink_descriptor,
++    media::OutputDeviceStatusCB callback) {
++  static_cast<RealtimeAudioDestinationHandler&>(Handler())
++      .SetSinkDescriptor(sink_descriptor, std::move(callback));
+ }
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h
+index 38b1394e60bf973143028941d840b911a4d05a10..3b7b30a1d57b48255f53dc218f02ff70ccfab0f3 100644
+--- a/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h
++++ b/third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h
+@@ -30,7 +30,9 @@
+ #include <memory>
+ 
+ #include "base/memory/weak_ptr.h"
++#include "media/base/output_device_info.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
+ #include "third_party/blink/renderer/modules/webaudio/realtime_audio_destination_handler.h"
+ #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
+@@ -42,17 +44,24 @@ namespace blink {
+ class AudioContext;
+ class ExceptionState;
+ class WebAudioLatencyHint;
++class WebAudioSinkDescriptor;
+ 
+ class RealtimeAudioDestinationNode final : public AudioDestinationNode {
+  public:
+   static RealtimeAudioDestinationNode* Create(
+       AudioContext*,
++      const WebAudioSinkDescriptor&,
+       const WebAudioLatencyHint&,
+       absl::optional<float> sample_rate);
+ 
+   explicit RealtimeAudioDestinationNode(AudioContext&,
++                                        const WebAudioSinkDescriptor&,
+                                         const WebAudioLatencyHint&,
+                                         absl::optional<float> sample_rate);
++
++  // See `RealtimeAudioDestinationHandler.SetSinkDescriptor` for details.
++  void SetSinkDescriptor(const WebAudioSinkDescriptor&,
++                         media::OutputDeviceStatusCB);
+ };
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.cc b/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..7b1904b1e8c929d95dce2ad46d0d59178524bba7
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.cc
+@@ -0,0 +1,158 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/modules/webaudio/setsinkid_resolver.h"
++
++#include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_union_audiosinkinfo_string.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
++#include "third_party/blink/renderer/modules/webaudio/realtime_audio_destination_node.h"
++
++namespace blink {
++
++SetSinkIdResolver* SetSinkIdResolver::Create(
++    ScriptState* script_state,
++    AudioContext& audio_context,
++    const V8UnionAudioSinkOptionsOrString& sink_id) {
++  DCHECK(IsMainThread());
++
++  SetSinkIdResolver* resolver = MakeGarbageCollected<SetSinkIdResolver>(
++      script_state, audio_context, sink_id);
++  resolver->KeepAliveWhilePending();
++  return resolver;
++}
++
++SetSinkIdResolver::SetSinkIdResolver(
++    ScriptState* script_state,
++    AudioContext& audio_context,
++    const V8UnionAudioSinkOptionsOrString& sink_id)
++    : ScriptPromiseResolver(script_state), audio_context_(audio_context) {
++  // Currently the only available AudioSinkOptions is a type of a silent sink,
++  // which can be specified by an empty descriptor constructor.
++  auto& frame_token = To<LocalDOMWindow>(audio_context_->GetExecutionContext())
++                          ->GetLocalFrameToken();
++  if (sink_id.GetContentType() ==
++      V8UnionAudioSinkOptionsOrString::ContentType::kAudioSinkOptions) {
++    sink_descriptor_ = WebAudioSinkDescriptor(frame_token);
++  } else {
++    sink_descriptor_ =
++        WebAudioSinkDescriptor(sink_id.GetAsString(), frame_token);
++  }
++}
++
++void SetSinkIdResolver::Start() {
++  DCHECK(IsMainThread());
++
++  ExecutionContext* context = GetExecutionContext();
++  if (!context || !audio_context_ || audio_context_->IsContextCleared()) {
++    // A detached BaseAudioContext should not be playing audio. The
++    // `Reject()` call below will not trigger any JS callbacks because
++    // the associated execution context is already detached.
++    ScriptState* script_state = GetScriptState();
++    ScriptState::Scope scope(script_state);
++    Reject(V8ThrowDOMException::CreateOrEmpty(
++        script_state->GetIsolate(), DOMExceptionCode::kInvalidStateError,
++        "Cannot invoke AudioContext.setSinkId() on a detached document."));
++    return;
++  }
++
++  auto set_sink_id_completion_callback = WTF::Bind(
++      &SetSinkIdResolver::OnSetSinkIdComplete, WrapWeakPersistent(this));
++
++  // Refer to
++  // https://webaudio.github.io/web-audio-api/#validating-sink-identifier for
++  // sink_id/sink_descriptor validation steps.
++  if (sink_descriptor_ == audio_context_->GetSinkDescriptor()) {
++    std::move(set_sink_id_completion_callback)
++        .Run(media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_OK);
++  } else if (!audio_context_->IsValidSinkDescriptor(sink_descriptor_)) {
++    std::move(set_sink_id_completion_callback)
++        .Run(media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_NOT_FOUND);
++  } else {
++    auto* audio_destination = audio_context_->destination();
++
++    // A sanity check to make sure we have valid audio_destination node from
++    // `audio_context_`.
++    if (!audio_destination) {
++      std::move(set_sink_id_completion_callback)
++          .Run(media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_INTERNAL);
++    } else {
++      auto set_sink_descriptor_callback = WTF::Bind(
++          &RealtimeAudioDestinationNode::SetSinkDescriptor,
++          WrapWeakPersistent(
++              static_cast<RealtimeAudioDestinationNode*>(audio_destination)),
++          sink_descriptor_, std::move(set_sink_id_completion_callback));
++
++      audio_context_->GetExecutionContext()
++          ->GetTaskRunner(TaskType::kInternalMediaRealTime)
++          ->PostTask(FROM_HERE, std::move(set_sink_descriptor_callback));
++    }
++  }
++}
++
++void SetSinkIdResolver::OnSetSinkIdComplete(media::OutputDeviceStatus status) {
++  DCHECK(IsMainThread());
++
++  auto* excecution_context = GetExecutionContext();
++  if (!excecution_context || excecution_context->IsContextDestroyed()) {
++    return;
++  }
++
++  ScriptState* script_state = GetScriptState();
++  ScriptState::Scope scope(script_state);
++
++  switch (status) {
++    case media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_OK:
++      // Update AudioContext's sink ID and fire the 'onsinkchange' event
++      NotifySetSinkIdIsDone();
++      Resolve();
++      break;
++    case media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_NOT_FOUND:
++      Reject(V8ThrowDOMException::CreateOrEmpty(
++          script_state->GetIsolate(), DOMExceptionCode::kNotFoundError,
++          "AudioContext.setSinkId(): failed: the device " +
++              String(sink_descriptor_.SinkId()) + " is not found."));
++      break;
++    case media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_NOT_AUTHORIZED:
++      Reject(V8ThrowDOMException::CreateOrEmpty(
++          script_state->GetIsolate(), DOMExceptionCode::kNotAllowedError,
++          "AudioContext.setSinkId() failed: access to the device " +
++              String(sink_descriptor_.SinkId()) + " is not permitted."));
++      break;
++    case media::OutputDeviceStatus::OUTPUT_DEVICE_STATUS_ERROR_TIMED_OUT:
++      Reject(V8ThrowDOMException::CreateOrEmpty(
++          script_state->GetIsolate(), DOMExceptionCode::kTimeoutError,
++          "AudioContext.setSinkId() failed: the request for device " +
++              String(sink_descriptor_.SinkId()) + " is timed out."));
++      break;
++    default:
++      NOTREACHED();
++  }
++
++  auto& resolvers = audio_context_->GetSetSinkIdResolver();
++
++  resolvers.pop_front();
++
++  if (!resolvers.empty()) {
++    resolvers.front()->Start();
++  }
++}
++
++void SetSinkIdResolver::NotifySetSinkIdIsDone() {
++  DCHECK(IsMainThread());
++
++  if (!audio_context_ || audio_context_->IsContextCleared()) {
++    return;
++  }
++
++  audio_context_->NotifySetSinkIdIsDone(sink_descriptor_);
++}
++
++void SetSinkIdResolver::Trace(Visitor* visitor) const {
++  visitor->Trace(audio_context_);
++  ScriptPromiseResolver::Trace(visitor);
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.h b/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7efc12d182f26c50205351d1ba4869883ae3c3a
+--- /dev/null
++++ b/third_party/blink/renderer/modules/webaudio/setsinkid_resolver.h
+@@ -0,0 +1,48 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_SETSINKID_RESOLVER_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_SETSINKID_RESOLVER_H_
++
++#include "media/base/output_device_info.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
++#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
++
++namespace blink {
++
++class AudioContext;
++class ScriptPromiseResolver;
++class V8UnionAudioSinkOptionsOrString;
++
++class SetSinkIdResolver : public ScriptPromiseResolver {
++ public:
++  static SetSinkIdResolver* Create(ScriptState*,
++                                   AudioContext&,
++                                   const V8UnionAudioSinkOptionsOrString&);
++  SetSinkIdResolver(ScriptState*,
++                    AudioContext&,
++                    const V8UnionAudioSinkOptionsOrString&);
++  SetSinkIdResolver(const SetSinkIdResolver&) = delete;
++  SetSinkIdResolver& operator=(const SetSinkIdResolver&) = delete;
++  ~SetSinkIdResolver() override = default;
++
++  void Start();
++
++  void Trace(Visitor*) const override;
++
++ private:
++  // This callback function is passed to 'AudioDestinationNode::SetSinkId()'.
++  // When the device status is okay, 'NotifySetSinkIdIsDone()' gets invoked.
++  void OnSetSinkIdComplete(media::OutputDeviceStatus status);
++
++  // This will update 'AudioContext::sink_id_' and dispatch event.
++  void NotifySetSinkIdIsDone();
++
++  WeakMember<AudioContext> audio_context_;
++
++  WebAudioSinkDescriptor sink_descriptor_;
++};
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_SETSINKID_RESOLVER_H_
+diff --git a/third_party/blink/renderer/platform/audio/audio_destination.cc b/third_party/blink/renderer/platform/audio/audio_destination.cc
+index 4f5429164868ac314b7f4b4162f0b89b8fb8bdd9..41ce90b7550f49e7f2cac60b99b533de3b0885ad 100644
+--- a/third_party/blink/renderer/platform/audio/audio_destination.cc
++++ b/third_party/blink/renderer/platform/audio/audio_destination.cc
+@@ -38,6 +38,7 @@
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+ #include "third_party/blink/renderer/platform/audio/push_pull_fifo.h"
+ #include "third_party/blink/renderer/platform/audio/vector_math.h"
+@@ -73,20 +74,24 @@ const char* DeviceStateToString(AudioDestination::DeviceState state) {
+ 
+ scoped_refptr<AudioDestination> AudioDestination::Create(
+     AudioIOCallback& callback,
++    const WebAudioSinkDescriptor& sink_descriptor,
+     unsigned number_of_output_channels,
+     const WebAudioLatencyHint& latency_hint,
+     absl::optional<float> context_sample_rate,
+     unsigned render_quantum_frames) {
+   return base::AdoptRef(
+-      new AudioDestination(callback, number_of_output_channels, latency_hint,
+-                           context_sample_rate, render_quantum_frames));
++      new AudioDestination(callback, sink_descriptor, number_of_output_channels,
++                           latency_hint, context_sample_rate,
++                           render_quantum_frames));
+ }
+ 
+-AudioDestination::AudioDestination(AudioIOCallback& callback,
+-                                   unsigned number_of_output_channels,
+-                                   const WebAudioLatencyHint& latency_hint,
+-                                   absl::optional<float> context_sample_rate,
+-                                   unsigned render_quantum_frames)
++AudioDestination::AudioDestination(
++    AudioIOCallback& callback,
++    const WebAudioSinkDescriptor& sink_descriptor,
++    unsigned number_of_output_channels,
++    const WebAudioLatencyHint& latency_hint,
++    absl::optional<float> context_sample_rate,
++    unsigned render_quantum_frames)
+     : render_quantum_frames_(render_quantum_frames),
+       number_of_output_channels_(number_of_output_channels),
+       fifo_(std::make_unique<PushPullFIFO>(number_of_output_channels,
+@@ -106,7 +111,7 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
+       String::Format("%s => (FIFO size=%u bytes)", __func__, fifo_->length()));
+ 
+   web_audio_device_ = Platform::Current()->CreateAudioDevice(
+-      number_of_output_channels, latency_hint, this);
++      sink_descriptor, number_of_output_channels, latency_hint, this);
+   DCHECK(web_audio_device_);
+ 
+   callback_buffer_size_ = web_audio_device_->FramesPerBuffer();
+diff --git a/third_party/blink/renderer/platform/audio/audio_destination.h b/third_party/blink/renderer/platform/audio/audio_destination.h
+index aa2d66e98d5b94b7052add77e77983c1c8ad985c..c89371c2000ce92e3646093d7f887e1432eb010f 100644
+--- a/third_party/blink/renderer/platform/audio/audio_destination.h
++++ b/third_party/blink/renderer/platform/audio/audio_destination.h
+@@ -49,6 +49,7 @@ namespace blink {
+ 
+ class PushPullFIFO;
+ class WebAudioLatencyHint;
++class WebAudioSinkDescriptor;
+ 
+ // The AudioDestination class is an audio sink interface between the media
+ // renderer and the Blink's WebAudio module. It has a FIFO to adapt the
+@@ -75,6 +76,7 @@ class PLATFORM_EXPORT AudioDestination
+   };
+ 
+   AudioDestination(AudioIOCallback&,
++                   const WebAudioSinkDescriptor& sink_descriptor,
+                    unsigned number_of_output_channels,
+                    const WebAudioLatencyHint&,
+                    absl::optional<float> context_sample_rate,
+@@ -85,6 +87,7 @@ class PLATFORM_EXPORT AudioDestination
+ 
+   static scoped_refptr<AudioDestination> Create(
+       AudioIOCallback&,
++      const WebAudioSinkDescriptor& sink_descriptor,
+       unsigned number_of_output_channels,
+       const WebAudioLatencyHint&,
+       absl::optional<float> context_sample_rate,
+diff --git a/third_party/blink/renderer/platform/audio/audio_destination_test.cc b/third_party/blink/renderer/platform/audio/audio_destination_test.cc
+index 5da5fb3ac9c75acd4fef0d0e0165fc8c7f888b7d..acbee1ce87490ffd457a11b24f806d92a678b05d 100644
+--- a/third_party/blink/renderer/platform/audio/audio_destination_test.cc
++++ b/third_party/blink/renderer/platform/audio/audio_destination_test.cc
+@@ -1,4 +1,4 @@
+-// Copyright 2017 The Chromium Authors. All rights reserved.
++// Copyright 2017 The Chromium Authors
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
+@@ -8,6 +8,7 @@
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "third_party/blink/public/platform/web_audio_device.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
++#include "third_party/blink/public/platform/web_audio_sink_descriptor.h"
+ #include "third_party/blink/renderer/platform/audio/audio_callback_metric_reporter.h"
+ #include "third_party/blink/renderer/platform/audio/audio_io_callback.h"
+ #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+@@ -17,6 +18,8 @@ namespace blink {
+ 
+ namespace {
+ 
++const blink::LocalFrameToken kFrameToken;
++
+ class MockWebAudioDevice : public WebAudioDevice {
+  public:
+   explicit MockWebAudioDevice(double sample_rate, int frames_per_buffer)
+@@ -37,6 +40,7 @@ class MockWebAudioDevice : public WebAudioDevice {
+ class TestPlatform : public TestingPlatformSupport {
+  public:
+   std::unique_ptr<WebAudioDevice> CreateAudioDevice(
++      const WebAudioSinkDescriptor& sink_descriptor,
+       unsigned number_of_output_channels,
+       const WebAudioLatencyHint& latency_hint,
+       WebAudioDevice::RenderCallback*) override {
+@@ -69,10 +73,13 @@ void CountWASamplesProcessedForRate(absl::optional<float> sample_rate) {
+   const int channel_count = Platform::Current()->AudioHardwareOutputChannels();
+   const size_t request_frames = Platform::Current()->AudioHardwareBufferSize();
+ 
++  // Assume the default audio device. (i.e. the empty string)
++  WebAudioSinkDescriptor sink_descriptor(WebString::FromUTF8(""), kFrameToken);
++
+   // TODO(https://crbug.com/988121) Replace 128 with the appropriate
+   // AudioContextRenderSizeHintCategory.
+   scoped_refptr<AudioDestination> destination = AudioDestination::Create(
+-      callback, channel_count, latency_hint, sample_rate, 128);
++      callback, sink_descriptor, channel_count, latency_hint, sample_rate, 128);
+   destination->Start();
+ 
+   Vector<float> channels[channel_count];
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+index bf062431fec711e099c73e2b0c53a104a0f06cbd..299dbb81fc1228d4a47ac6984d1037973b14427a 100644
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -196,6 +196,10 @@
+       origin_trial_allows_third_party: true,
+       status: "experimental",
+     },
++    {
++      name: "AudioContextSetSinkId",
++      status: "stable",
++    },
+     {
+       name: "AudioOutputDevices",
+       // Android does not yet support switching of audio output devices
+diff --git a/tools/metrics/histograms/enums.xml b/tools/metrics/histograms/enums.xml
+index c5677b058c1b887e4296f1779ae6bfd4174f53cc..069a54cef19b8772033f65bc02c6f17ba9b934a4 100644
+--- a/tools/metrics/histograms/enums.xml
++++ b/tools/metrics/histograms/enums.xml
+@@ -41150,6 +41150,8 @@ Called by update_use_counter_feature_enum.py.-->
+   <int value="4333" label="PrivateAggregationApiAll"/>
+   <int value="4334" label="PrivateAggregationApiFledge"/>
+   <int value="4335" label="PrivateAggregationApiSharedStorage"/>
++  <int value="4349" label="AudioContextSinkId"/>
++  <int value="4350" label="AudioContextSetSinkId"/>
+ </enum>
+ 
+ <enum name="FeaturePolicyAllowlistType">
