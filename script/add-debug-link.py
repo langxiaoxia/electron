@@ -14,14 +14,18 @@ def add_debug_link_into_binaries(directory, target_cpu, debug_dir):
       add_debug_link_into_binary(binary_path, target_cpu, debug_dir)
 
 def add_debug_link_into_binary(binary_path, target_cpu, debug_dir):
-  if PLATFORM == 'linux' and target_cpu in ('x86', 'arm', 'arm64'):
+  if PLATFORM == 'linux' and target_cpu in ('x86', 'arm'):
     # Skip because no objcopy binary on the given target.
     return
 
   debug_name = get_debug_name(binary_path)
   # Make sure the path to the binary is not relative because of cwd param.
   real_binary_path = os.path.realpath(binary_path)
-  cmd = ['objcopy', '--add-gnu-debuglink=' + debug_name, real_binary_path]
+  if PLATFORM == 'linux' and target_cpu == 'arm64':
+    cmd = ['aarch64-linux-gnu-objcopy']
+  else:
+    cmd = ['objcopy']
+  cmd.extend(['--add-gnu-debuglink=' + debug_name, real_binary_path])
   execute(cmd, cwd=debug_dir)
 
 def get_debug_name(binary_path):
