@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 13 Jan 2023 14:39:19 +0800
+Subject: fix: Disable an overlay feature NoUndamagedOverlayPromotion on
+ Windows.
+
+https://chromium-review.googlesource.com/c/chromium/src/+/4023335
+
+diff --git a/components/viz/service/display/dc_layer_overlay.cc b/components/viz/service/display/dc_layer_overlay.cc
+index e2fa757c0723a5ce9b498a43acfaca693eed708b..075bdf737d29d7a7f1170943a14e449f7576cded 100644
+--- a/components/viz/service/display/dc_layer_overlay.cc
++++ b/components/viz/service/display/dc_layer_overlay.cc
+@@ -439,7 +439,9 @@ DCLayerOverlayProcessor::DCLayerOverlayProcessor(
+     bool skip_initialization_for_testing)
+     : has_overlay_support_(skip_initialization_for_testing),
+       allowed_yuv_overlay_count_(allowed_yuv_overlay_count),
+-      debug_settings_(debug_settings) {
++      debug_settings_(debug_settings),
++      no_undamaged_overlay_promotion_(base::FeatureList::IsEnabled(
++          features::kNoUndamagedOverlayPromotion)) { //+by xxlang : NoUndamagedOverlayPromotion
+   if (!skip_initialization_for_testing) {
+     UpdateHasHwOverlaySupport();
+     gl::DirectCompositionOverlayCapsMonitor::GetInstance()->AddObserver(this);
+@@ -734,14 +736,21 @@ void DCLayerOverlayProcessor::Process(
+             has_overlay_support_, allowed_yuv_overlay_count_,
+             processed_yuv_overlay_count_, resource_provider);
+         yuv_quads_in_quad_list++;
+-        if (it->shared_quad_state->overlay_damage_index.has_value() &&
+-            !surface_damage_rect_list_[it->shared_quad_state
+-                                           ->overlay_damage_index.value()]
+-                 .IsEmpty()) {
+-          damaged_yuv_quads_in_quad_list++;
++
++        if (no_undamaged_overlay_promotion_) { //+by xxlang : NoUndamagedOverlayPromotion
++          if (it->shared_quad_state->overlay_damage_index.has_value() &&
++              !surface_damage_rect_list_[it->shared_quad_state
++                                             ->overlay_damage_index.value()]
++                   .IsEmpty()) {
++            damaged_yuv_quads_in_quad_list++;
++            if (result == DC_LAYER_SUCCESS)
++              processed_yuv_overlay_count_++;
++          }
++        } else {
+           if (result == DC_LAYER_SUCCESS)
+             processed_yuv_overlay_count_++;
+         }
++
+         break;
+       case DrawQuad::Material::kTextureContent: {
+         const TextureDrawQuad* tex_quad = TextureDrawQuad::MaterialCast(*it);
+@@ -810,13 +819,18 @@ void DCLayerOverlayProcessor::Process(
+   // overlays
+   bool reject_overlays = false;
+   if (yuv_quads_in_quad_list > 1 && !has_protected_video_or_texture_overlays) {
+-    if (damaged_yuv_quads_in_quad_list == processed_yuv_overlay_count_) {
+-      frames_since_last_qualified_multi_overlays_++;
++    if (no_undamaged_overlay_promotion_) { //+by xxlang : NoUndamagedOverlayPromotion
++      if (damaged_yuv_quads_in_quad_list == processed_yuv_overlay_count_) {
++        frames_since_last_qualified_multi_overlays_++;
++      } else {
++        frames_since_last_qualified_multi_overlays_ = 0;
++      }
++      reject_overlays = frames_since_last_qualified_multi_overlays_ <=
++                        kDCLayerFramesDelayedBeforeOverlay;
+     } else {
+-      frames_since_last_qualified_multi_overlays_ = 0;
++      if (yuv_quads_in_quad_list != processed_yuv_overlay_count_)
++        reject_overlays = true;
+     }
+-    reject_overlays = frames_since_last_qualified_multi_overlays_ <=
+-                      kDCLayerFramesDelayedBeforeOverlay;
+   }
+ 
+   // A YUV quad might be rejected later due to not allowed as an underlay.
+@@ -848,8 +862,9 @@ void DCLayerOverlayProcessor::Process(
+             .IsEmpty();
+ 
+     if (yuv_quads_in_quad_list > allowed_yuv_overlay_count_ &&
+-        !has_protected_video_or_texture_overlays &&
+-        it->material == DrawQuad::Material::kYuvVideoContent && undamaged) {
++        !has_protected_video_or_texture_overlays && undamaged &&
++        no_undamaged_overlay_promotion_ && //+by xxlang : NoUndamagedOverlayPromotion
++        it->material == DrawQuad::Material::kYuvVideoContent) {
+       RecordDCLayerResult(DC_LAYER_FAILED_NOT_DAMAGED, it);
+       continue;
+     }
+diff --git a/components/viz/service/display/dc_layer_overlay.h b/components/viz/service/display/dc_layer_overlay.h
+index 46bcd5e5bc79558412fecd00f1495670ab63fa4e..c0343eeb9dfedf25022ed9f7d524907364cd3b28 100644
+--- a/components/viz/service/display/dc_layer_overlay.h
++++ b/components/viz/service/display/dc_layer_overlay.h
+@@ -219,6 +219,7 @@ class VIZ_SERVICE_EXPORT DCLayerOverlayProcessor final
+   // List of clear video content candidate bounds.
+   std::vector<gfx::Rect> previous_frame_overlay_candidate_rects_{};
+   int frames_since_last_overlay_candidate_rects_change_ = 0;
++  bool no_undamaged_overlay_promotion_; //+by xxlang : NoUndamagedOverlayPromotion
+ 
+   THREAD_CHECKER(thread_checker_);
+ };
+diff --git a/gpu/config/gpu_finch_features.cc b/gpu/config/gpu_finch_features.cc
+index 898bba6d46ad79e72d79fb9085ad42ada6c97068..7a271a74d787a3801c67dc6c3da6b0d795a2dda6 100644
+--- a/gpu/config/gpu_finch_features.cc
++++ b/gpu/config/gpu_finch_features.cc
+@@ -175,6 +175,9 @@ const base::Feature kGpuProcessHighPriorityWin{
+ // move.
+ const base::Feature kDisableVideoOverlayIfMoving{
+     "DisableVideoOverlayIfMoving", base::FEATURE_DISABLED_BY_DEFAULT};
++
++const base::Feature kNoUndamagedOverlayPromotion{
++    "NoUndamagedOverlayPromotion", base::FEATURE_DISABLED_BY_DEFAULT};//+by xxlang : NoUndamagedOverlayPromotion
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
+diff --git a/gpu/config/gpu_finch_features.h b/gpu/config/gpu_finch_features.h
+index db6550048cff2b0d0e650cc694ca4f8e3d15909e..b4a5ac673868b3fe77504fe1b7bbb90a35ca4faa 100644
+--- a/gpu/config/gpu_finch_features.h
++++ b/gpu/config/gpu_finch_features.h
+@@ -42,6 +42,8 @@ GPU_EXPORT extern const base::Feature kCanvasContextLostInBackground;
+ GPU_EXPORT extern const base::Feature kGpuProcessHighPriorityWin;
+ 
+ GPU_EXPORT extern const base::Feature kDisableVideoOverlayIfMoving;
++
++GPU_EXPORT extern const base::Feature kNoUndamagedOverlayPromotion; //+by xxlang : NoUndamagedOverlayPromotion
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
