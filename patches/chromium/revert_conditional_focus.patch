@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 30 Jan 2023 10:44:39 +0800
+Subject: fix: Bug 247587.
+
+Revert Conditional Focus.
+
+diff --git a/content/browser/media/capture/desktop_capture_device.cc b/content/browser/media/capture/desktop_capture_device.cc
+index c3048a2473ad6eb83266972fbfae47d24cba9ae5..8a394734f923699caff5e811144ead664685d36a 100644
+--- a/content/browser/media/capture/desktop_capture_device.cc
++++ b/content/browser/media/capture/desktop_capture_device.cc
+@@ -608,6 +608,7 @@ std::unique_ptr<media::VideoCaptureDevice> DesktopCaptureDevice::Create(
+           webrtc::DesktopCapturer::CreateWindowCapturer(options);
+ #endif
+       if (window_capturer && window_capturer->SelectSource(source.id)) {
++        window_capturer->FocusOnSelectedSource(); //+by xxlang : revert Conditional Focus
+         window_capturer->SetMaskWindow(mask.id); //+by xxlang : mask id
+         capturer = std::make_unique<webrtc::DesktopAndCursorComposer>(
+             std::move(window_capturer), options);
