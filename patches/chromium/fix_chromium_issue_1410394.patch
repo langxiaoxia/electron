@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 17 Feb 2023 18:14:54 +0800
+Subject: fix: Chromium Issue 1410394.
+
+https://bugs.chromium.org/p/chromium/issues/detail?id=1410394
+
+diff --git a/third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h b/third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h
+index 72585a5a59348ae27995d18cc9a81fe5123cc033..19bc7509a171ebba72a15fbd66df1195efbd2729 100644
+--- a/third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h
++++ b/third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h
+@@ -89,7 +89,7 @@ class ColdModeSpellCheckRequester
+     int previous_checked_length = 0;
+     int accumulated_delta = 0;
+   };
+-  HeapHashMap<Member<const Element>, FullyCheckedEditableEntry>
++  HeapHashMap<WeakMember<const Element>, FullyCheckedEditableEntry>
+       fully_checked_root_editables_;
+ 
+   // A test-only flag for forcing lifecycle advancing.
