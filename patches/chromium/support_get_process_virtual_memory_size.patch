@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Fri, 17 Feb 2023 15:06:05 +0800
+Subject: feat: get process virtual memory size.
+
+Support get process virtual memory size and limit.
+
+diff --git a/base/process/process_metrics.h b/base/process/process_metrics.h
+index 34675dd037e19a63a495e9edcecde60121b78d73..917fb24e19da92c10371f36d59ad34fa8371cefa 100644
+--- a/base/process/process_metrics.h
++++ b/base/process/process_metrics.h
+@@ -108,6 +108,8 @@ class BASE_EXPORT ProcessMetrics {
+   static std::unique_ptr<ProcessMetrics> CreateCurrentProcessMetrics();
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
++  BASE_EXPORT size_t GetVirtualMemorySize() const; //+by xxlang : virtual memory size
++
+   // Resident Set Size is a Linux/Android specific memory concept. Do not
+   // attempt to extend this to other platforms.
+   BASE_EXPORT size_t GetResidentSetSize() const;
+diff --git a/base/process/process_metrics_linux.cc b/base/process/process_metrics_linux.cc
+index 398a7f8bd1862d926541e9a3dbfd163ff928f9bd..d096aee647f64f1e92d9649bf8055f3564257d5b 100644
+--- a/base/process/process_metrics_linux.cc
++++ b/base/process/process_metrics_linux.cc
+@@ -172,6 +172,12 @@ std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
+   return WrapUnique(new ProcessMetrics(process));
+ }
+ 
++//+by xxlang : virtual memory size {
++size_t ProcessMetrics::GetVirtualMemorySize() const {
++  return internal::ReadProcStatsAndGetFieldAsSizeT(process_, internal::VM_VSIZE);
++}
++//+by xxlang : virtual memory size }
++
+ size_t ProcessMetrics::GetResidentSetSize() const {
+   return internal::ReadProcStatsAndGetFieldAsSizeT(process_, internal::VM_RSS) *
+          checked_cast<size_t>(getpagesize());
+diff --git a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+index 176dc196991692eac925b8b257d08ac259ef5787..ad7a0908dee84a6503c4bdde997aa099c0680742 100644
+--- a/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
++++ b/services/resource_coordinator/memory_instrumentation/queued_request_dispatcher.cc
+@@ -75,6 +75,16 @@ memory_instrumentation::mojom::OSMemDumpPtr CreatePublicOSDump(
+     uint32_t shared_resident_kb) {
+   mojom::OSMemDumpPtr os_dump = mojom::OSMemDump::New();
+ 
++  //+by xxlang : virtual memory size {
++#if BUILDFLAG(IS_WIN)
++  os_dump->virtual_limit_kb =
++      internal_os_dump.platform_private_footprint->virtual_limit_bytes / 1024;
++#endif
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++  os_dump->virtual_footprint_kb =
++      internal_os_dump.platform_private_footprint->virtual_footprint_bytes / 1024;
++#endif
++  //+by xxlang : virtual memory size }
+   os_dump->resident_set_kb = internal_os_dump.resident_set_kb;
+   os_dump->peak_resident_set_kb = internal_os_dump.peak_resident_set_kb;
+   os_dump->is_peak_rss_resettable = internal_os_dump.is_peak_rss_resettable;
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_linux.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_linux.cc
+index 032435704cd4f9d8c1df065cc153640b6f01a545..19f3889174fed9f7ceb9ae53bb56212449f8e8a4 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_linux.cc
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_linux.cc
+@@ -303,6 +303,7 @@ bool OSMetrics::FillOSMemoryDump(base::ProcessId pid,
+   uint64_t rss_anon_bytes = (resident_pages - shared_pages) * page_size;
+   uint64_t vm_swap_bytes = process_metrics->GetVmSwapBytes();
+ 
++  dump->platform_private_footprint->virtual_footprint_bytes = process_metrics->GetVirtualMemorySize(); //+by xxlang : virtual memory size
+   dump->platform_private_footprint->rss_anon_bytes = rss_anon_bytes;
+   dump->platform_private_footprint->vm_swap_bytes = vm_swap_bytes;
+   dump->resident_set_kb = process_metrics->GetResidentSetSize() / 1024;
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_mac.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_mac.cc
+index 6d93804967467bccd97b3b0a98b25c0a958819a2..2595dda39688e0843e8e0b3e5acb4ed8a6391dc6 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_mac.cc
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_mac.cc
+@@ -249,6 +249,7 @@ bool OSMetrics::FillOSMemoryDump(base::ProcessId pid,
+   if (result != KERN_SUCCESS)
+     return false;
+ 
++  dump->platform_private_footprint->virtual_footprint_bytes = info.virtual_size; //+by xxlang : virtual memory size
+   dump->platform_private_footprint->internal_bytes = info.internal;
+   dump->platform_private_footprint->compressed_bytes = info.compressed;
+ 
+diff --git a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_win.cc b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_win.cc
+index c1828efb817fee76f846f95d75fed0aca144958f..23a0f890483cca953110a3a7c5b52fd1dea713fa 100644
+--- a/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_win.cc
++++ b/services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics_win.cc
+@@ -40,6 +40,17 @@ bool OSMetrics::FillOSMemoryDump(base::ProcessId pid,
+   // additional information like ProcessHandle or port provider.
+   DCHECK_EQ(base::kNullProcessId, pid);
+ 
++  //+by xxlang : virtual memory size {
++  MEMORYSTATUSEX mem_status;
++  mem_status.dwLength = sizeof(mem_status);
++  if (::GlobalMemoryStatusEx(&mem_status)) {
++    dump->platform_private_footprint->virtual_limit_bytes =
++        base::saturated_cast<uint64_t>(mem_status.ullTotalVirtual);
++    dump->platform_private_footprint->virtual_footprint_bytes =
++        base::saturated_cast<uint64_t>(mem_status.ullTotalVirtual - mem_status.ullAvailVirtual);
++  }
++  //+by xxlang : virtual memory size }
++
+   PROCESS_MEMORY_COUNTERS_EX pmc;
+   if (::GetProcessMemoryInfo(::GetCurrentProcess(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+@@ -48,6 +59,7 @@ bool OSMetrics::FillOSMemoryDump(base::ProcessId pid,
+     dump->resident_set_kb =
+         base::saturated_cast<uint32_t>(pmc.WorkingSetSize / 1024);
+   }
++
+   return true;
+ }
+ 
+diff --git a/services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom b/services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom
+index e9169f92216dca17c338d6df2352ccb7ab3577e0..d96ea0763a93f37c50bd20cc43afed8b3039b743 100644
+--- a/services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom
++++ b/services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom
+@@ -128,6 +128,12 @@ struct VmRegion {
+ // Platform-specific data that will be used to compute the
+ // PrivateMemoryFootprint.
+ struct PlatformPrivateFootprint {
++  // Windows
++  uint64 virtual_limit_bytes = 0;
++
++  // macOS, Linux, Windows
++  uint64 virtual_footprint_bytes = 0;
++
+   uint64 phys_footprint_bytes = 0;
+   // macOS 10.12+
+   uint64 internal_bytes = 0;
+@@ -163,6 +169,10 @@ struct RawOSMemDump {
+ // These structs are public:
+ 
+ struct OSMemDump {
++  uint64 virtual_limit_kb = 0;
++
++  uint64 virtual_footprint_kb = 0;
++
+   uint32 resident_set_kb = 0;
+ 
+   // The peak resident set size as observed by the kernel. This is currently

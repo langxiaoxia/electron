@@ -139,3 +139,4 @@ fix_gs_bug_242036.patch
 add_audio_context_set_sink_id.patch
 disable_no_undamaged_overlay_promotion.patch
 revert_conditional_focus.patch
+support_get_process_virtual_memory_size.patch

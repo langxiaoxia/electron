@@ -267,6 +267,12 @@ void ElectronBindings::DidReceiveMemoryDump(
     if (target_pid == dump.pid()) {
       gin_helper::Dictionary dict = gin::Dictionary::CreateEmpty(isolate);
       const auto& osdump = dump.os_dump();
+      //+by xxlang : virtual memory size {
+#if BUILDFLAG(IS_WIN)
+      dict.Set("virtualLimit", osdump.virtual_limit_kb);
+#endif
+      dict.Set("virtualSize", osdump.virtual_footprint_kb);
+      //+by xxlang : virtual memory size }
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
       dict.Set("residentSet", osdump.resident_set_kb);
 #endif
