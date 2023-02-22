@@ -195,6 +195,7 @@ void ElectronCrashReporterClient::GetProcessSimpleAnnotations(
   }
   (*annotations)["prod"] = ELECTRON_PRODUCT_NAME;
   (*annotations)["ver"] = ELECTRON_VERSION_STRING;
+  (*annotations)["tag"] = ELECTRON_TAG_STRING;
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
