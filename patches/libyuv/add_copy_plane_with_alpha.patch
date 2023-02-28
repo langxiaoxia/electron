@@ -84,7 +84,7 @@ index fae8630e9579cd203e5879555c0ad958a4f39976..62339988ae888ac7a43ee07a13b8e39f
  void CopyPlane_16(const uint16_t* src_y,
                    int src_stride_y,
 diff --git a/source/row_common.cc b/source/row_common.cc
-index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..a926d4426a52008ca5a883fe20e778a294f7fcab 100644
+index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..b041f7e103bec1d18716d00ce6003359b254b577 100644
 --- a/source/row_common.cc
 +++ b/source/row_common.cc
 @@ -3049,6 +3049,26 @@ void CopyRow_C(const uint8_t* src, uint8_t* dst, int count) {
@@ -99,7 +99,7 @@ index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..a926d4426a52008ca5a883fe20e778a2
 +    uint8_t r = src[1];
 +    uint8_t g = src[2];
 +    uint8_t b = src[3];
-+    if (a > 0) {
++    if (a > 3) {
 +      dst[0] = a;
 +      dst[1] = r;
 +      dst[2] = g;
