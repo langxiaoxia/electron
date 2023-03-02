@@ -42,6 +42,12 @@ app.on('will-quit', () => {
 
 The `globalShortcut` module has the following methods:
 
+### `globalShortcut.send(accelerator)`
+
+* `accelerator` [Accelerator](accelerator.md)
+
+Returns `boolean` - Whether or not the shortcut was sent successfully.
+
 ### `globalShortcut.register(accelerator, callback)`
 
 * `accelerator` [Accelerator](accelerator.md)

@@ -39,6 +39,7 @@ class GlobalShortcut : public extensions::GlobalShortcutListener::Observer,
   typedef std::map<ui::Accelerator, base::RepeatingClosure>
       AcceleratorCallbackMap;
 
+  bool Send(const ui::Accelerator& accelerator);
   bool RegisterAll(const std::vector<ui::Accelerator>& accelerators,
                    const base::RepeatingClosure& callback);
   bool Register(const ui::Accelerator& accelerator,
