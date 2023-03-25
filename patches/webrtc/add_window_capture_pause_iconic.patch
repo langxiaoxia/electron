@@ -60,14 +60,16 @@ index 5aed0105e8fc45ca17efd7de10e051644c0d4e43..b43997a973754bbf8c5c0efdfb52f430
          new BasicDesktopFrame(DesktopSize(1, 1)));
  
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index d420285be429d7622917d71b9d315e96f30c9c0f..310573ff0d8a798501f09c10c6ddb7b7bda1020a 100644
+index d420285be429d7622917d71b9d315e96f30c9c0f..cece0252ebbdf46c822732dde0803f7a4dc11c0d 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
-@@ -234,7 +234,16 @@ explicit WindowCapturerMac(
+@@ -233,8 +233,17 @@ explicit WindowCapturerMac(
+     last_window_id_ = on_screen_window;
    }
  
-   std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindowWithMask(on_screen_window, mask_id_); //+by xxlang : window mask
+-  std::unique_ptr<DesktopFrame> frame = DesktopFrameCGImage::CreateForWindowWithMask(on_screen_window, mask_id_); //+by xxlang : window mask
 -  if (!frame) {
++  std::unique_ptr<DesktopFrame> frame = IsWindowOnScreen(mask_id_) ? DesktopFrameCGImage::CreateForWindowWithMask(on_screen_window, mask_id_) : DesktopFrameCGImage::CreateForWindow(on_screen_window); //+by xxlang : window mask
 +  //+by xxlang : capture pause {
 +  // On macOS Mojave we receive a 1x1 frame when the shared window is off screen.
 +  // On macOS Catalina and Big Sur we receive null frame when the shared window is off screen.
