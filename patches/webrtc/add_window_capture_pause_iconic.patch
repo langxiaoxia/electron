@@ -38,7 +38,7 @@ index 5c1d24863ca5363cd32bfb5ced6f86a00b738116..c0f0d96dd843908e554342d90fddd470
      return;
    }
 diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
-index 80a5ff955a4b73adf7b541396a6aede63790a5f3..bb48222e64aeb7e12058643ea7f90f3e53f5bca0 100644
+index 5aed0105e8fc45ca17efd7de10e051644c0d4e43..b43997a973754bbf8c5c0efdfb52f4307871b85d 100644
 --- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
 +++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
 @@ -219,6 +219,17 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(

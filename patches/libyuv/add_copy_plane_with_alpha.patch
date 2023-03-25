@@ -84,10 +84,10 @@ index fae8630e9579cd203e5879555c0ad958a4f39976..62339988ae888ac7a43ee07a13b8e39f
  void CopyPlane_16(const uint16_t* src_y,
                    int src_stride_y,
 diff --git a/source/row_common.cc b/source/row_common.cc
-index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..b041f7e103bec1d18716d00ce6003359b254b577 100644
+index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..7cf012e9962f719cc2a19f210c52b00ba09ed3b8 100644
 --- a/source/row_common.cc
 +++ b/source/row_common.cc
-@@ -3049,6 +3049,26 @@ void CopyRow_C(const uint8_t* src, uint8_t* dst, int count) {
+@@ -3049,6 +3049,25 @@ void CopyRow_C(const uint8_t* src, uint8_t* dst, int count) {
    memcpy(dst, src, count);
  }
  
@@ -95,15 +95,14 @@ index 9d94ab289f813fe00f6c9c1ab8e4c22e6cbbfca6..b041f7e103bec1d18716d00ce6003359
 +void CopyRowWithAlpha_C(const uint8_t* src, uint8_t* dst, int count) {
 +  int x;
 +  for (x = 0; x < count / 4; ++x) {
-+    uint8_t a = src[0];
-+    uint8_t r = src[1];
-+    uint8_t g = src[2];
-+    uint8_t b = src[3];
-+    if (a > 3) {
-+      dst[0] = a;
-+      dst[1] = r;
-+      dst[2] = g;
-+      dst[3] = b;
++    uint8_t b = src[0];
++    uint8_t g = src[1];
++    uint8_t r = src[2];
++    if (b == 0 && g == 0 && r == 0) { // background
++    } else {
++      dst[0] = b;
++      dst[1] = g;
++      dst[2] = r;
 +    }
 +    dst += 4;
 +    src += 4;
