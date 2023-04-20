@@ -6,7 +6,7 @@ Subject: fix: webrtc bug 14265.
 Don't override permanent errors in WindowCapturerWinGdi.
 
 diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
-index b43997a973754bbf8c5c0efdfb52f4307871b85d..462e412dfff11bb8aac76e8e1a181a31b7941f00 100644
+index dc81032516ffe4ef4301dd885c63e7cdefdc7e2e..6df0f73dafeacbe79444e7eddc62c5d556d60664 100644
 --- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
 +++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
 @@ -164,7 +164,10 @@ void WindowCapturerWinGdi::CaptureFrame() {

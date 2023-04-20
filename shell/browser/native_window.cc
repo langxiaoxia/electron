@@ -88,6 +88,7 @@ NativeWindow::NativeWindow(const gin_helper::Dictionary& options,
 
   options.Get(options::kFrame, &has_frame_);
   options.Get(options::kTransparent, &transparent_);
+  options.Get(options::kIndirect, &indirect_);  //+by xxlang
   options.Get(options::kEnableLargerThanScreen, &enable_larger_than_screen_);
   options.Get(options::kTitleBarStyle, &title_bar_style_);
 

@@ -141,3 +141,4 @@ disable_no_undamaged_overlay_promotion.patch
 revert_conditional_focus.patch
 support_get_process_virtual_memory_size.patch
 fix_chromium_issue_1410394.patch
+feat_add_indirect_composition.patch

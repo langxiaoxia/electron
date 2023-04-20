@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 20 Apr 2023 12:18:30 +0800
+Subject: feat: support indirect composition.
+
+Support indirect composition on both enable and disable gpu.
+
+diff --git a/components/viz/service/display_embedder/software_output_device_win.cc b/components/viz/service/display_embedder/software_output_device_win.cc
+index 9416ec929bebcff7f07088e635376ef232eb515f..6ffbe11e9d76f219972d7e01eb800ab416d60061 100644
+--- a/components/viz/service/display_embedder/software_output_device_win.cc
++++ b/components/viz/service/display_embedder/software_output_device_win.cc
+@@ -17,6 +17,7 @@
+ #include "services/viz/privileged/mojom/compositing/layered_window_updater.mojom.h"
+ #include "skia/ext/platform_canvas.h"
+ #include "skia/ext/skia_utils_win.h"
++#include "ui/base/win/internal_constants.h"
+ #include "ui/gfx/gdi_util.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/win/hwnd_util.h"
+@@ -215,7 +216,7 @@ std::unique_ptr<SoftwareOutputDevice> CreateSoftwareOutputDeviceWin(
+     HWND hwnd,
+     OutputDeviceBacking* backing,
+     mojom::DisplayClient* display_client) {
+-  if (NeedsToUseLayerWindow(hwnd)) {
++  if (NeedsToUseLayerWindow(hwnd) && !GetProp(hwnd, ui::kWindowIndirect)) { //*by xxlang
+     DCHECK(display_client);
+ 
+     // Setup mojom::LayeredWindowUpdater implementation in the browser process
+diff --git a/gpu/ipc/service/image_transport_surface_win.cc b/gpu/ipc/service/image_transport_surface_win.cc
+index f5f93c9a0f6082547ee1543be4f1ad7643cba02b..fa72e80096abbdac97eb573fa13d9839d814b104 100644
+--- a/gpu/ipc/service/image_transport_surface_win.cc
++++ b/gpu/ipc/service/image_transport_surface_win.cc
+@@ -10,6 +10,7 @@
+ #include "gpu/command_buffer/service/feature_info.h"
+ #include "gpu/config/gpu_preferences.h"
+ #include "gpu/ipc/service/pass_through_image_transport_surface.h"
++#include "ui/base/win/internal_constants.h"
+ #include "ui/gfx/native_widget_types.h"
+ #include "ui/gl/direct_composition_support.h"
+ #include "ui/gl/direct_composition_surface_win.h"
+@@ -53,7 +54,7 @@ scoped_refptr<gl::GLSurface> ImageTransportSurface::CreateNativeSurface(
+   scoped_refptr<gl::GLSurface> surface;
+ 
+   if (gl::GetGLImplementation() == gl::kGLImplementationEGLANGLE) {
+-    if (gl::DirectCompositionSupported()) {
++    if (gl::DirectCompositionSupported() && !GetProp(surface_handle, ui::kWindowIndirect)) { //*by xxlang
+       auto vsync_callback = delegate->GetGpuVSyncCallback();
+       auto settings = CreateDirectCompositionSurfaceSettings(
+           delegate->GetFeatureInfo()->workarounds());
+diff --git a/ui/base/win/internal_constants.cc b/ui/base/win/internal_constants.cc
+index dbeb8269cf6b653e108f4bf1d46eb001df266737..87fb2ceca2bb05df71f753d37c3d54c87d4ee200 100644
+--- a/ui/base/win/internal_constants.cc
++++ b/ui/base/win/internal_constants.cc
+@@ -13,5 +13,7 @@ const wchar_t kLegacyRenderWidgetHostHwnd[] = L"Chrome_RenderWidgetHostHWND";
+ 
+ const wchar_t kWindowTranslucent[] = L"Chrome.WindowTranslucent";
+ 
++const wchar_t kWindowIndirect[] = L"Chrome.WindowIndirect"; //+by xxlang
++
+ }  // namespace ui
+ 
+diff --git a/ui/base/win/internal_constants.h b/ui/base/win/internal_constants.h
+index 622e38fd639a185e93dfff84e256dc6b4a67e1aa..3326bb77c48b45694fb49510526962c656542eb1 100644
+--- a/ui/base/win/internal_constants.h
++++ b/ui/base/win/internal_constants.h
+@@ -23,6 +23,8 @@ COMPONENT_EXPORT(UI_BASE) extern const wchar_t kLegacyRenderWidgetHostHwnd[];
+ // compositor).
+ COMPONENT_EXPORT(UI_BASE) extern const wchar_t kWindowTranslucent[];
+ 
++COMPONENT_EXPORT(UI_BASE) extern const wchar_t kWindowIndirect[]; //+by xxlang
++
+ }  // namespace ui
+ 
+ #endif  // UI_BASE_WIN_INTERNAL_CONSTANTS_H_
+diff --git a/ui/views/widget/widget.h b/ui/views/widget/widget.h
+index 6e8a17f9452fbfff24a37a162300d045a868e8d3..f00dc30fd1450bb63815b2ce08538694f5fbd010 100644
+--- a/ui/views/widget/widget.h
++++ b/ui/views/widget/widget.h
+@@ -200,6 +200,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
+       kTranslucent,
+     };
+ 
++    enum class WindowComposition {
++      kDirect,
++      kIndirect,
++    };
++
+     enum class Activatable {
+       // Infer whether the window should be activatable from the window type.
+       kDefault,
+@@ -270,6 +275,8 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
+     // determine whether they are.
+     WindowOpacity opacity = WindowOpacity::kInferred;
+ 
++    WindowComposition composition = WindowComposition::kDirect; //+by xxlang
++
+     bool accept_events = true;
+ 
+     Activatable activatable = Activatable::kDefault;
+diff --git a/ui/views/widget/widget_hwnd_utils.cc b/ui/views/widget/widget_hwnd_utils.cc
+index 89b4b5e0ec4bc0405b45443e43ea963bbb7a4c9a..bf02383bdf265fc2ce46bd953a2be3d754cb8876 100644
+--- a/ui/views/widget/widget_hwnd_utils.cc
++++ b/ui/views/widget/widget_hwnd_utils.cc
+@@ -169,10 +169,13 @@ void ConfigureWindowStyles(
+       (params.opacity == Widget::InitParams::WindowOpacity::kTranslucent &&
+        (ui::win::IsAeroGlassEnabled() || params.force_software_compositing));
+ 
++  bool is_indirect = (params.composition == Widget::InitParams::WindowComposition::kIndirect); //+by xxlang
++
+   CalculateWindowStylesFromInitParams(params, widget_delegate,
+                                       native_widget_delegate, is_translucent,
+                                       &style, &ex_style, &class_style);
+   handler->set_is_translucent(is_translucent);
++  handler->set_is_indirect(is_indirect); //+by xxlang
+   handler->set_initial_class_style(class_style);
+   handler->set_window_style(handler->window_style() | style);
+   handler->set_window_ex_style(handler->window_ex_style() | ex_style);
+diff --git a/ui/views/win/hwnd_message_handler.cc b/ui/views/win/hwnd_message_handler.cc
+index dec439f15a7995b14ccf4ef95651413911b5fc4f..5e530d94d620fa5137c34187f4b051fc2aeda41c 100644
+--- a/ui/views/win/hwnd_message_handler.cc
++++ b/ui/views/win/hwnd_message_handler.cc
+@@ -1718,6 +1718,10 @@ LRESULT HWNDMessageHandler::OnCreate(CREATESTRUCT* create_struct) {
+     ::SetProp(hwnd(), ui::kWindowTranslucent, reinterpret_cast<HANDLE>(1));
+   }
+ 
++  if (is_indirect_) {
++    ::SetProp(hwnd(), ui::kWindowIndirect, reinterpret_cast<HANDLE>(1)); //+by xxlang
++  }
++
+   fullscreen_handler_->set_hwnd(hwnd());
+ 
+   base::win::AllowDarkModeForWindow(hwnd(), true);
+@@ -1762,6 +1766,7 @@ LRESULT HWNDMessageHandler::OnCreate(CREATESTRUCT* create_struct) {
+ 
+ void HWNDMessageHandler::OnDestroy() {
+   ::RemoveProp(hwnd(), ui::kWindowTranslucent);
++  ::RemoveProp(hwnd(), ui::kWindowIndirect); //+by xxlang
+   session_change_observer_.reset(nullptr);
+   delegate_->HandleDestroying();
+   // If the window going away is a fullscreen window then remove its references
+diff --git a/ui/views/win/hwnd_message_handler.h b/ui/views/win/hwnd_message_handler.h
+index caa02c07b371569be5ac5ac3ce7efe40359cd017..dd53652d174b69f1d845246965b562f70837efca 100644
+--- a/ui/views/win/hwnd_message_handler.h
++++ b/ui/views/win/hwnd_message_handler.h
+@@ -194,6 +194,11 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
+   }
+   bool is_translucent() const { return is_translucent_; }
+ 
++  void set_is_indirect(bool is_indirect) {
++    is_indirect_ = is_indirect;
++  }
++  bool is_indirect() const { return is_indirect_; }
++
+   std::unique_ptr<aura::ScopedEnableUnadjustedMouseEvents>
+   RegisterUnadjustedMouseEvent();
+   void set_using_wm_input(bool using_wm_input) {
+@@ -791,6 +796,8 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
+   // partially or fully transparent.
+   bool is_translucent_ = false;
+ 
++  bool is_indirect_ = false; //+by xxlang
++
+   // True if the window should process WM_POINTER for touch events and
+   // not WM_TOUCH events.
+   bool pointer_events_for_touch_;

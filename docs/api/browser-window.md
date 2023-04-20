@@ -226,6 +226,7 @@ It creates a new `BrowserWindow` with native properties as set by the `options`.
     some GTK+3 desktop environments. Default is `false`.
   * `transparent` boolean (optional) - Makes the window [transparent](../tutorial/window-customization.md#create-transparent-windows).
     Default is `false`. On Windows, does not work unless the window is frameless.
+  * `indirect` boolean (optional)
   * `type` string (optional) - The type of window, default is normal window. See more about
     this below.
   * `visualEffectState` string (optional) _macOS_ - Specify how the material

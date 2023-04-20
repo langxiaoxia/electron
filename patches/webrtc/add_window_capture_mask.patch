@@ -426,10 +426,10 @@ index 0fb69b272de587db689d8d0e4054de8c79c1315c..dbe4015e6d7f4354f594745e27bd47b3
  std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateFromCGImage(
      rtc::ScopedCFTypeRef<CGImageRef> cg_image) {
 diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
-index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..5aed0105e8fc45ca17efd7de10e051644c0d4e43 100644
+index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..826e061fca40f658e28dd8926276f93f780a1d6c 100644
 --- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
 +++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
-@@ -177,6 +177,12 @@ void WindowCapturerWinGdi::CaptureFrame() {
+@@ -177,8 +177,14 @@ void WindowCapturerWinGdi::CaptureFrame() {
    callback_->OnCaptureResult(results.result, std::move(results.frame));
  }
  
@@ -440,8 +440,29 @@ index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..5aed0105e8fc45ca17efd7de10e05164
 +//+by xxlang : window mask }
 +
  WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
-     bool capture_owned_windows) {
+-    bool capture_owned_windows) {
++    bool capture_owned_windows, bool force_bitblt) {
    TRACE_EVENT0("webrtc", "WindowCapturerWinGdi::CaptureFrame");
+ 
+   if (!window_) {
+@@ -298,7 +304,7 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+   // on Windows 8.1 and later, PrintWindow is only used when the window is
+   // occluded. When the window is not occluded, it is much faster to capture
+   // the screen and to crop it to the window position and size.
+-  if (rtc::rtc_win::GetVersion() >= rtc::rtc_win::Version::VERSION_WIN8) {
++  if (!force_bitblt && rtc::rtc_win::GetVersion() >= rtc::rtc_win::Version::VERSION_WIN8) {
+     // Special flag that makes PrintWindow to work on Windows 8.1 and later.
+     // Indeed certain apps (e.g. those using DirectComposition rendering) can't
+     // be captured using BitBlt or PrintWindow without this flag. Note that on
+@@ -309,7 +315,7 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+     result = PrintWindow(window_, mem_dc, flags);
+   }
+ 
+-  if (!result && (!window_capture_helper_.IsAeroEnabled() ||
++  if (!force_bitblt && !result && (!window_capture_helper_.IsAeroEnabled() ||
+                   !previous_size_.equals(frame->size()))) {
+     result = PrintWindow(window_, mem_dc, 0);
+   }
 @@ -354,6 +360,12 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
      if (context.IsSelectedWindowValid()) {
        EnumWindows(OwnedWindowCollector, reinterpret_cast<LPARAM>(&context));
@@ -455,6 +476,15 @@ index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..5aed0105e8fc45ca17efd7de10e05164
        if (!owned_windows_.empty()) {
          if (!owned_window_capturer_) {
            owned_window_capturer_ = std::make_unique<WindowCapturerWinGdi>(
+@@ -368,7 +380,7 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
+           if (owned_window_capturer_->SelectSource(
+                   reinterpret_cast<SourceId>(hwnd))) {
+             CaptureResults results = owned_window_capturer_->CaptureFrame(
+-                /*capture_owned_windows*/ false);
++                /*capture_owned_windows*/ false, hwnd == mask_window_);
+ 
+             if (results.result != DesktopCapturer::Result::SUCCESS) {
+               // Simply log any error capturing an owned/pop-up window without
 @@ -382,7 +394,7 @@ WindowCapturerWinGdi::CaptureResults WindowCapturerWinGdi::CaptureFrame(
                // may no-op if they no longer intersect (if the owned window was
                // moved outside the owner bounds since scheduled for capture.)
@@ -465,7 +495,7 @@ index 5f18dd65ae6fe8766e2e8a3d3bd46c59fddbd062..5aed0105e8fc45ca17efd7de10e05164
            }
          }
 diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.h b/modules/desktop_capture/win/window_capturer_win_gdi.h
-index bf94dfe192a59a0a56213bd9565bf1fbfe332f46..5757f53fe336f7a44788f257e89cb71701c4e574 100644
+index bf94dfe192a59a0a56213bd9565bf1fbfe332f46..f9d6e9ba992bc6f43be0591d010f96fc57f41056 100644
 --- a/modules/desktop_capture/win/window_capturer_win_gdi.h
 +++ b/modules/desktop_capture/win/window_capturer_win_gdi.h
 @@ -38,6 +38,7 @@ class WindowCapturerWinGdi : public DesktopCapturer {
@@ -476,6 +506,15 @@ index bf94dfe192a59a0a56213bd9565bf1fbfe332f46..5757f53fe336f7a44788f257e89cb717
    bool GetSourceList(SourceList* sources) override;
    bool SelectSource(SourceId id) override;
    bool FocusOnSelectedSource() override;
+@@ -49,7 +50,7 @@ class WindowCapturerWinGdi : public DesktopCapturer {
+     std::unique_ptr<DesktopFrame> frame;
+   };
+ 
+-  CaptureResults CaptureFrame(bool capture_owned_windows);
++  CaptureResults CaptureFrame(bool capture_owned_windows, bool force_bitblt = false);
+ 
+   Callback* callback_ = nullptr;
+ 
 @@ -57,6 +58,8 @@ class WindowCapturerWinGdi : public DesktopCapturer {
    // selected.
    HWND window_ = nullptr;

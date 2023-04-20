@@ -83,6 +83,9 @@ const char kDarkTheme[] = "darkTheme";
 // Whether the window should be transparent.
 const char kTransparent[] = "transparent";
 
+// Whether the window should be indirect.
+const char kIndirect[] = "indirect";  //+by xxlang
+
 // Window type hint.
 const char kType[] = "type";
 

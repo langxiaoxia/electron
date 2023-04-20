@@ -46,6 +46,7 @@ extern const char kAutoHideMenuBar[];
 extern const char kEnableLargerThanScreen[];
 extern const char kDarkTheme[];
 extern const char kTransparent[];
+extern const char kIndirect[];  //+by xxlang
 extern const char kType[];
 extern const char kDisableAutoHideCursor[];
 extern const char kStandardWindow[];

@@ -369,6 +369,7 @@ class NativeWindow : public base::SupportsUserData,
 
   bool has_client_frame() const { return has_client_frame_; }
   bool transparent() const { return transparent_; }
+  bool indirect() const { return indirect_; }  //+by xxlang
   bool enable_larger_than_screen() const { return enable_larger_than_screen_; }
 
   NativeWindow* parent() const { return parent_; }
@@ -430,6 +431,9 @@ class NativeWindow : public base::SupportsUserData,
 
   // Whether window is transparent.
   bool transparent_ = false;
+
+  // Whether window is indirect.
+  bool indirect_ = false;  //+by xxlang
 
   // Minimum and maximum size, stored as content size.
   extensions::SizeConstraints size_constraints_;

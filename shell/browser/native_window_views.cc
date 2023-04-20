@@ -251,6 +251,10 @@ NativeWindowViews::NativeWindowViews(const gin_helper::Dictionary& options,
   if (transparent() || has_client_frame())
     params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
 
+  if (indirect())
+    params.composition =
+        views::Widget::InitParams::WindowComposition::kIndirect;  //+by xxlang
+
   // The given window is most likely not rectangular since it uses
   // transparency and has no standard frame, don't show a shadow for it.
   if (transparent() && !has_frame())
