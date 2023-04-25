@@ -35,7 +35,7 @@ index 6c49f0f8514e0882d7032071dd41979623bf5258..51b797ed198421c6f26c2a76a68d8c4d
    bool GetSourceList(SourceList* sources) override;
    bool SelectSource(SourceId id) override;
 diff --git a/modules/desktop_capture/cropping_window_capturer.cc b/modules/desktop_capture/cropping_window_capturer.cc
-index 6671592d5c735d70bccd5e1d71919219b9256546..f18abb714e9bdd4b2fa349a495ed6efc711370dc 100644
+index 6671592d5c735d70bccd5e1d71919219b9256546..c3ec9738ea11a99e0dec1caaf8c07222384fe3f7 100644
 --- a/modules/desktop_capture/cropping_window_capturer.cc
 +++ b/modules/desktop_capture/cropping_window_capturer.cc
 @@ -26,6 +26,7 @@ CroppingWindowCapturer::CroppingWindowCapturer(
@@ -46,7 +46,7 @@ index 6671592d5c735d70bccd5e1d71919219b9256546..f18abb714e9bdd4b2fa349a495ed6efc
        last_capturer_(0), //+by xxlang
        enable_border_(options.enable_border()), //+by xxlang : window border
        first_capture_(true), //+by xxlang : window border
-@@ -56,11 +57,12 @@ void CroppingWindowCapturer::CaptureFrame() {
+@@ -56,11 +57,14 @@ void CroppingWindowCapturer::CaptureFrame() {
      if (first_capture_) {
        first_capture_ = false;
      } else {
@@ -54,13 +54,17 @@ index 6671592d5c735d70bccd5e1d71919219b9256546..f18abb714e9bdd4b2fa349a495ed6efc
 +      RTC_LOG(LS_INFO) << "CroppingWindowCapturer create border for window " << selected_window_ << " with mask " << mask_window_;
        window_border_->CreateForWindow(selected_window_);
        if (window_border_->IsCreated()) {
-         RTC_LOG(LS_INFO) << "CroppingWindowCapturer exclude border window";
-         SetExcludedWindow(window_border_->GetBorderId());
-+        window_border_->SetMaskId(mask_window_);
+-        RTC_LOG(LS_INFO) << "CroppingWindowCapturer exclude border window";
+-        SetExcludedWindow(window_border_->GetBorderId());
++        transparent_windows_.push_back(window_border_->GetBorderId());
++        if (mask_window_) {
++          window_border_->SetMaskId(mask_window_);
++          transparent_windows_.push_back(mask_window_);
++        }
        }
      }
    }
-@@ -90,6 +92,13 @@ void CroppingWindowCapturer::CaptureFrame() {
+@@ -90,6 +94,13 @@ void CroppingWindowCapturer::CaptureFrame() {
    }
  }
  
@@ -74,8 +78,16 @@ index 6671592d5c735d70bccd5e1d71919219b9256546..f18abb714e9bdd4b2fa349a495ed6efc
  void CroppingWindowCapturer::SetExcludedWindow(WindowId window) {
    RTC_LOG(LS_INFO) << "CroppingWindowCapturer::SetExcludedWindow " << excluded_window_ << " => " << window;
    excluded_window_ = window;
+@@ -107,6 +118,7 @@ bool CroppingWindowCapturer::SelectSource(SourceId id) {
+     RTC_LOG(LS_INFO) << "CroppingWindowCapturer::SelectSource " << selected_window_ << " => " << id;
+     //+by xxlang : window border {
+     if (selected_window_ != id) {
++      transparent_windows_.clear();
+       window_border_->Destroy();
+       first_capture_ = true;
+     }
 diff --git a/modules/desktop_capture/cropping_window_capturer.h b/modules/desktop_capture/cropping_window_capturer.h
-index 1481889a2e60d1d1687c0f3815f8dda4ea99174c..ea2a87c2008689766dfd9c896799354058a9c3e3 100644
+index 1481889a2e60d1d1687c0f3815f8dda4ea99174c..e91806cd8c5af1169f0946b51103086151c90241 100644
 --- a/modules/desktop_capture/cropping_window_capturer.h
 +++ b/modules/desktop_capture/cropping_window_capturer.h
 @@ -40,6 +40,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
@@ -86,7 +98,15 @@ index 1481889a2e60d1d1687c0f3815f8dda4ea99174c..ea2a87c2008689766dfd9c8967993540
    void SetExcludedWindow(WindowId window) override;
    bool GetSourceList(SourceList* sources) override;
    bool SelectSource(SourceId id) override;
-@@ -80,6 +81,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
+@@ -72,6 +73,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
+   DesktopCapturer* window_capturer() const { return window_capturer_.get(); }
+ 
+   WindowId last_window_id_; //+by xxlang
++  std::vector<WindowId> transparent_windows_;
+ 
+  private:
+   DesktopCaptureOptions options_;
+@@ -80,6 +82,7 @@ class RTC_EXPORT CroppingWindowCapturer : public DesktopCapturer,
    std::unique_ptr<DesktopCapturer> screen_capturer_;
    SourceId selected_window_;
    WindowId excluded_window_;
@@ -94,6 +114,54 @@ index 1481889a2e60d1d1687c0f3815f8dda4ea99174c..ea2a87c2008689766dfd9c8967993540
    int last_capturer_; //+by xxlang : 0 - none, 1 - screen, 2 - window.
  
    //+by xxlang : window border {
+diff --git a/modules/desktop_capture/cropping_window_capturer_win.cc b/modules/desktop_capture/cropping_window_capturer_win.cc
+index 4e6c587dbb3b4880c9fc8920ee823cb426de776e..891cfb763da4a17d86a694102a8b5a290ddef7ef 100644
+--- a/modules/desktop_capture/cropping_window_capturer_win.cc
++++ b/modules/desktop_capture/cropping_window_capturer_win.cc
+@@ -25,12 +25,14 @@ namespace {
+ struct TopWindowVerifierContext : public SelectedWindowContext {
+   TopWindowVerifierContext(HWND selected_window,
+                            HWND excluded_window,
++                           std::vector<WindowId> transparent_windows,
+                            DesktopRect selected_window_rect,
+                            WindowCaptureHelperWin* window_capture_helper)
+       : SelectedWindowContext(selected_window,
+                               selected_window_rect,
+                               window_capture_helper),
+-        excluded_window(excluded_window) {
++        excluded_window(excluded_window),
++        transparent_windows_(transparent_windows) {
+     RTC_DCHECK_NE(selected_window, excluded_window);
+   }
+ 
+@@ -61,6 +63,11 @@ struct TopWindowVerifierContext : public SelectedWindowContext {
+           continue;
+         }
+ 
++        // Ignore transparent windows.
++        if (std::find(transparent_windows_.begin(), transparent_windows_.end(), reinterpret_cast<WindowId>(hwnd)) != transparent_windows_.end()) {
++          continue;
++        }
++
+         // Ignore windows that aren't visible on the current desktop.
+         if (!window_capture_helper()->IsWindowVisibleOnCurrentDesktop(hwnd)) {
+           continue;
+@@ -124,6 +131,7 @@ struct TopWindowVerifierContext : public SelectedWindowContext {
+   }
+ 
+   const HWND excluded_window;
++  const std::vector<WindowId> transparent_windows_;
+ };
+ 
+ class CroppingWindowCapturerWin : public CroppingWindowCapturer {
+@@ -283,6 +291,7 @@ bool CroppingWindowCapturerWin::ShouldUseScreenCapturer() {
+   // IsWindowIntersectWithSelectedWindow().
+   TopWindowVerifierContext context(selected,
+                                    reinterpret_cast<HWND>(excluded_window()),
++                                   transparent_windows_,
+                                    content_rect, &window_capture_helper_);
+   return context.IsTopWindow();
+ }
 diff --git a/modules/desktop_capture/desktop_and_cursor_composer.cc b/modules/desktop_capture/desktop_and_cursor_composer.cc
 index dd688ac5f2d72dcf08d73340c07248780e5a2f13..0028187552a1d5255479274f7cedd102556aba54 100644
 --- a/modules/desktop_capture/desktop_and_cursor_composer.cc
@@ -391,7 +459,7 @@ index d6279f9b3662488ff7bce91191663286fe676eb3..6efd1cf1508c827b6673afde074c1b50
  
    DesktopFrameCGImage(const DesktopFrameCGImage&) = delete;
 diff --git a/modules/desktop_capture/mac/desktop_frame_cgimage.mm b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
-index 0fb69b272de587db689d8d0e4054de8c79c1315c..dbe4015e6d7f4354f594745e27bd47b3e754cf41 100644
+index 0fb69b272de587db689d8d0e4054de8c79c1315c..571b50d856947062e046a925ddc66762b62be320 100644
 --- a/modules/desktop_capture/mac/desktop_frame_cgimage.mm
 +++ b/modules/desktop_capture/mac/desktop_frame_cgimage.mm
 @@ -43,6 +43,30 @@
@@ -412,7 +480,7 @@ index 0fb69b272de587db689d8d0e4054de8c79c1315c..dbe4015e6d7f4354f594745e27bd47b3
 +  rtc::ScopedCFTypeRef<CGImageRef> cg_image(
 +      CGWindowListCreateImageFromArray(CGRectNull,
 +                              windowArray,
-+                              kCGWindowImageDefault));
++                              kCGWindowImageBoundsIgnoreFraming));
 +  CFRelease(windowArray);
 +  if (!cg_image) {
 +    return nullptr;
@@ -525,7 +593,7 @@ index bf94dfe192a59a0a56213bd9565bf1fbfe332f46..f9d6e9ba992bc6f43be0591d010f96fc
  
    WindowCaptureHelperWin window_capture_helper_;
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..d420285be429d7622917d71b9d315e96f30c9c0f 100644
+index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..06b00c4147fff0b63a31f30d5d2ebffb9c5f2f8c 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
 @@ -59,6 +59,7 @@ explicit WindowCapturerMac(
@@ -558,7 +626,15 @@ index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..d420285be429d7622917d71b9d315e96
  bool WindowCapturerMac::GetSourceList(SourceList* sources) {
    return webrtc::GetWindowList(sources, true, true);
  }
-@@ -186,9 +195,10 @@ explicit WindowCapturerMac(
+@@ -111,6 +120,7 @@ explicit WindowCapturerMac(
+   //+by xxlang : window border {
+   RTC_LOG(LS_INFO) << "WindowCapturerMac::SelectSource " << window_id_ << " => " << id;
+   if (window_id_ != id) {
++    window_finder_.transparent_windows_.clear();
+     window_border_->Destroy();
+     first_capture_ = true;
+   }
+@@ -186,9 +196,14 @@ explicit WindowCapturerMac(
      if (first_capture_) {
        first_capture_ = false;
      } else {
@@ -566,11 +642,15 @@ index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..d420285be429d7622917d71b9d315e96
 +      RTC_LOG(LS_INFO) << "WindowCapturerMac create border for window " << window_id_ << " with mask " << mask_id_;
        window_border_->CreateForWindow(window_id_);
        if (window_border_->IsCreated()) {
-+        window_border_->SetMaskId(mask_id_);
++        window_finder_.transparent_windows_.push_back(window_border_->GetBorderId());
++        if (IsWindowValid(mask_id_)) {
++          window_border_->SetMaskId(mask_id_);
++          window_finder_.transparent_windows_.push_back(mask_id_);
++        }
        }
      }
    }
-@@ -223,7 +233,7 @@ explicit WindowCapturerMac(
+@@ -223,7 +238,7 @@ explicit WindowCapturerMac(
      last_window_id_ = on_screen_window;
    }
  
@@ -579,3 +659,38 @@ index 73c58fa0dfa3d69bf9422e836b7511af202c65a7..d420285be429d7622917d71b9d315e96
    if (!frame) {
      RTC_LOG(LS_WARNING) << "Temporarily failed to capture window.";
      callback_->OnCaptureResult(Result::ERROR_TEMPORARY, nullptr);
+diff --git a/modules/desktop_capture/window_finder_mac.h b/modules/desktop_capture/window_finder_mac.h
+index 988dd497dd23a8bedb1bad11c9fb5ebbeca4ae7e..d72b73b8780d93ccdd32a051dc6748442cc0b078 100644
+--- a/modules/desktop_capture/window_finder_mac.h
++++ b/modules/desktop_capture/window_finder_mac.h
+@@ -28,6 +28,8 @@ class WindowFinderMac final : public WindowFinder {
+   // WindowFinder implementation.
+   WindowId GetWindowUnderPoint(DesktopVector point) override;
+ 
++  std::vector<WindowId> transparent_windows_;
++
+  private:
+   const rtc::scoped_refptr<DesktopConfigurationMonitor> configuration_monitor_;
+ };
+diff --git a/modules/desktop_capture/window_finder_mac.mm b/modules/desktop_capture/window_finder_mac.mm
+index e1d0316c798d674cbc57582517811a6e4f8d6eec..888156d0056a48f0ca72128f0c1b181e643dbe04 100644
+--- a/modules/desktop_capture/window_finder_mac.mm
++++ b/modules/desktop_capture/window_finder_mac.mm
+@@ -29,12 +29,15 @@
+ WindowId WindowFinderMac::GetWindowUnderPoint(DesktopVector point) {
+   WindowId id = kNullWindowId;
+   GetWindowList(
+-      [&id, point](CFDictionaryRef window) {
++      [&id, this, point](CFDictionaryRef window) {
+         DesktopRect bounds;
+         bounds = GetWindowBounds(window);
+         if (bounds.Contains(point)) {
+           id = GetWindowId(window);
+-          return false;
++          // Ignore transparent windows.
++          if (std::find(this->transparent_windows_.begin(), this->transparent_windows_.end(), id) == this->transparent_windows_.end()) {
++            return false;
++          }
+         }
+         return true;
+       },

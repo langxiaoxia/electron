@@ -60,10 +60,10 @@ index 826e061fca40f658e28dd8926276f93f780a1d6c..dc81032516ffe4ef4301dd885c63e7cd
          new BasicDesktopFrame(DesktopSize(1, 1)));
  
 diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
-index d420285be429d7622917d71b9d315e96f30c9c0f..cece0252ebbdf46c822732dde0803f7a4dc11c0d 100644
+index 06b00c4147fff0b63a31f30d5d2ebffb9c5f2f8c..1df31953ea13e20ca7a9820de13a4ac4d9e14893 100644
 --- a/modules/desktop_capture/window_capturer_mac.mm
 +++ b/modules/desktop_capture/window_capturer_mac.mm
-@@ -233,8 +233,17 @@ explicit WindowCapturerMac(
+@@ -238,8 +238,17 @@ explicit WindowCapturerMac(
      last_window_id_ = on_screen_window;
    }
  
