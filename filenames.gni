@@ -277,6 +277,8 @@ filenames = {
     "shell/browser/api/electron_api_event.cc",
     "shell/browser/api/electron_api_event_emitter.cc",
     "shell/browser/api/electron_api_event_emitter.h",
+    "shell/browser/api/electron_api_global_input.cc",
+    "shell/browser/api/electron_api_global_input.h",
     "shell/browser/api/electron_api_global_shortcut.cc",
     "shell/browser/api/electron_api_global_shortcut.h",
     "shell/browser/api/electron_api_in_app_purchase.cc",

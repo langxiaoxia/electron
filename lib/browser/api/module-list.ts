@@ -10,6 +10,7 @@ export const browserModuleList: ElectronInternal.ModuleEntry[] = [
   { name: 'contentTracing', loader: () => require('./content-tracing') },
   { name: 'crashReporter', loader: () => require('./crash-reporter') },
   { name: 'dialog', loader: () => require('./dialog') },
+  { name: 'globalInput', loader: () => require('./global-input') },
   { name: 'globalShortcut', loader: () => require('./global-shortcut') },
   { name: 'ipcMain', loader: () => require('./ipc-main') },
   { name: 'inAppPurchase', loader: () => require('./in-app-purchase') },

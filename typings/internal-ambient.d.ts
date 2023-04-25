@@ -203,6 +203,7 @@ declare namespace NodeJS {
     _linkedBinding(name: 'electron_browser_event_emitter'): {
       setEventEmitterPrototype(prototype: Object): void;
     };
+    _linkedBinding(name: 'electron_browser_global_input'): { globalInput: Electron.GlobalInput };
     _linkedBinding(name: 'electron_browser_global_shortcut'): { globalShortcut: Electron.GlobalShortcut };
     _linkedBinding(name: 'electron_browser_image_view'): { ImageView: any };
     _linkedBinding(name: 'electron_browser_in_app_purchase'): { inAppPurchase: Electron.InAppPurchase };
