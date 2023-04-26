@@ -13,11 +13,13 @@ event of the app module is emitted.
 
 The `globalInput` module has the following methods:
 
-### `globalInput.sendMouse(id, action, buttons, x, y, width, height, alt, ctrl, shift, meta)`
+### `globalInput.sendMouse(id, action, buttons, dx, dy, x, y, width, height, alt, ctrl, shift, meta)`
 
 * `id` string - id of [`DesktopCapturerSource`] (structures/desktop-capturer-source.md) object.
 * `action` Integer - mouse motion type, 0: move, 1: down, 2: up, 3: wheel, 4: trackpad.
 * `buttons` Integer - which buttons are pressed, 0: none, 001: left, 010: right, 100: middle.
+* `dx` Integer - wheel movement right or left.
+* `dy` Integer - wheel movement forward or backward.
 * `x` Integer - mouse horizontal position relative to the viewport.
 * `y` Integer - mouse vertical position relative to the viewport.
 * `width` Integer - width of the viewport.

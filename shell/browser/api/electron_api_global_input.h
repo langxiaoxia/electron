@@ -32,6 +32,8 @@ class GlobalInput : public gin::Wrappable<GlobalInput> {
   bool SendMouse(const std::string& id,
                  int action,
                  int buttons,
+                 int dx,
+                 int dy,
                  int x,
                  int y,
                  int width,
