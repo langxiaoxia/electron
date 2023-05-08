@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Mon, 8 May 2023 11:08:02 +0800
+Subject: feat: add g729 codec.
+
+Add G.729 codec.
+
+diff --git a/third_party/blink/renderer/platform/peerconnection/audio_codec_factory.cc b/third_party/blink/renderer/platform/peerconnection/audio_codec_factory.cc
+index 0165a9bd17c9166389c9f0492cff01b488153ac5..032e91c90823aef434a0f362290b978ed81c3a63 100644
+--- a/third_party/blink/renderer/platform/peerconnection/audio_codec_factory.cc
++++ b/third_party/blink/renderer/platform/peerconnection/audio_codec_factory.cc
+@@ -15,6 +15,8 @@
+ #include "third_party/webrtc/api/audio_codecs/g711/audio_encoder_g711.h"
+ #include "third_party/webrtc/api/audio_codecs/g722/audio_decoder_g722.h"
+ #include "third_party/webrtc/api/audio_codecs/g722/audio_encoder_g722.h"
++#include "third_party/webrtc/api/audio_codecs/g729/audio_decoder_g729.h"
++#include "third_party/webrtc/api/audio_codecs/g729/audio_encoder_g729.h"
+ #include "third_party/webrtc/api/audio_codecs/isac/audio_decoder_isac.h"
+ #include "third_party/webrtc/api/audio_codecs/isac/audio_encoder_isac.h"
+ #include "third_party/webrtc/api/audio_codecs/opus/audio_decoder_multi_channel_opus.h"
+@@ -75,6 +77,7 @@ CreateWebrtcAudioEncoderFactory() {
+   return webrtc::CreateAudioEncoderFactory<
+       webrtc::AudioEncoderOpus, webrtc::AudioEncoderIsac,
+       webrtc::AudioEncoderG722, webrtc::AudioEncoderG711,
++      webrtc::AudioEncoderG729,
+       NotAdvertisedEncoder<webrtc::AudioEncoderL16>,
+       NotAdvertisedEncoder<webrtc::AudioEncoderMultiChannelOpus>>();
+ }
+@@ -84,6 +87,7 @@ CreateWebrtcAudioDecoderFactory() {
+   return webrtc::CreateAudioDecoderFactory<
+       webrtc::AudioDecoderOpus, webrtc::AudioDecoderIsac,
+       webrtc::AudioDecoderG722, webrtc::AudioDecoderG711,
++      webrtc::AudioDecoderG729,
+       NotAdvertisedDecoder<webrtc::AudioDecoderL16>,
+       NotAdvertisedDecoder<webrtc::AudioDecoderMultiChannelOpus>>();
+ }
+diff --git a/third_party/webrtc_overrides/BUILD.gn b/third_party/webrtc_overrides/BUILD.gn
+index 70010439af41f56e20db6b32f4158b64cef1e0bb..fb73772098d5127b3e1539ab92298d49e984247d 100644
+--- a/third_party/webrtc_overrides/BUILD.gn
++++ b/third_party/webrtc_overrides/BUILD.gn
+@@ -47,6 +47,8 @@ webrtc_public_deps = [
+   "//third_party/webrtc/api/audio_codecs/g711:audio_encoder_g711",
+   "//third_party/webrtc/api/audio_codecs/g722:audio_decoder_g722",
+   "//third_party/webrtc/api/audio_codecs/g722:audio_encoder_g722",
++  "//third_party/webrtc/api/audio_codecs/g729:audio_decoder_g729",
++  "//third_party/webrtc/api/audio_codecs/g729:audio_encoder_g729",
+   "//third_party/webrtc/api/audio_codecs/isac:audio_decoder_isac",
+   "//third_party/webrtc/api/audio_codecs/isac:audio_encoder_isac",
+   "//third_party/webrtc/api/audio_codecs/opus:audio_decoder_multiopus",
