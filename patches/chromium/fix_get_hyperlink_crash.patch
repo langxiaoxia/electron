@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Wed, 26 Jul 2023 11:47:26 +0800
+Subject: fix: get_hyperlink crash.
+
+We don't want to crash, just output logs.
+
+diff --git a/content/browser/accessibility/browser_accessibility_com_win.cc b/content/browser/accessibility/browser_accessibility_com_win.cc
+index d6a00de6695b5dc368db0ae36b4106052798c3e1..1d922355a3029a4bf36cf0eb0c843a6c9a10b14b 100644
+--- a/content/browser/accessibility/browser_accessibility_com_win.cc
++++ b/content/browser/accessibility/browser_accessibility_com_win.cc
+@@ -522,8 +522,7 @@ IFACEMETHODIMP BrowserAccessibilityComWin::get_hyperlink(
+ #if defined(AX_FAIL_FAST_BUILD)  // Fail in debug/sanitizers/clusterfuzz.
+     bool do_report = true;
+ #else
+-    std::srand(std::time(nullptr));             // Use current time as seed.
+-    bool do_report = (std::rand() % 100 == 0);  // Roughly 1% of the time.
++    bool do_report = false; //+by xxlang: We don't want to crash, just output logs.
+ #endif
+     if (do_report) {
+       LONG num_hyperlinks = -1;
+@@ -536,6 +535,14 @@ IFACEMETHODIMP BrowserAccessibilityComWin::get_hyperlink(
+                    << " needs_update=" << hypertext_.needs_update
+                    << " hyperlink_id=" << id
+                    << "\nparent=" << GetData().ToString();
++    } else {
++      LOG(ERROR) << "Hyperlink error:\n index=" << index
++                   << " nHyperLinks#1=" << hypertext_.hyperlinks.size()
++                   << " nHyperLinks#2="
++                   << hypertext_.hyperlink_offset_to_index.size()
++                   << " needs_update=" << hypertext_.needs_update
++                   << " hyperlink_id=" << id
++                   << "\nparent=" << GetData().ToString();
+     }
+     return E_FAIL;
+   }
