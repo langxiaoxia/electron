@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 3 Aug 2023 14:14:15 +0800
+Subject: fix: gs bug 267516.
+
+Skip capture QMShadowWndClass windows.
+
+diff --git a/modules/desktop_capture/win/window_capturer_win_gdi.cc b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+index 6df0f73dafeacbe79444e7eddc62c5d556d60664..99099e5d8a0501331ad25f66b1fb6b82589cc0e4 100644
+--- a/modules/desktop_capture/win/window_capturer_win_gdi.cc
++++ b/modules/desktop_capture/win/window_capturer_win_gdi.cc
+@@ -79,14 +79,25 @@ BOOL CALLBACK OwnedWindowCollector(HWND hwnd, LPARAM param) {
+     // e.g. some tooltips have the transparent style set).
+     if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT) {
+       const WCHAR kSysShadow[] = L"SysShadow";
+-      const size_t kClassLength = arraysize(kSysShadow);
+-      WCHAR class_name[kClassLength];
++      const size_t kSysClassLength = arraysize(kSysShadow);
++      //+by xxlang : QQ Music {
++      const WCHAR kQMShadow[] = L"QMShadowWndClass";
++      const size_t kQMClassLength = arraysize(kQMShadow);
++      //+by xxlang : QQ Music }
++      const size_t kClassLength = 256;
++      WCHAR class_name[kClassLength] = L"";
+       const int class_name_length =
+           GetClassNameW(hwnd, class_name, kClassLength);
+-      if (class_name_length == kClassLength - 1 &&
++      if (class_name_length == kSysClassLength - 1 &&
+           wcscmp(class_name, kSysShadow) == 0) {
+         return TRUE;
+       }
++      //+by xxlang : QQ Music {
++      if (class_name_length == kQMClassLength - 1 &&
++          wcscmp(class_name, kQMShadow) == 0) {
++        return TRUE;
++      }
++      //+by xxlang : QQ Music }
+     }
+ 
+     context->owned_windows->push_back(hwnd);
