@@ -971,10 +971,10 @@ index 0000000000000000000000000000000000000000..030886a8a200549cf082085d8bbeaa55
 +}
 diff --git a/modules/audio_coding/codecs/g729/g729_interface.h b/modules/audio_coding/codecs/g729/g729_interface.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..a0825b4355bec1e865f4a8101983d697a7fa7e7a
+index 0000000000000000000000000000000000000000..7c2ef924e030f2fc3a9c6c8fda561187f53d90ca
 --- /dev/null
 +++ b/modules/audio_coding/codecs/g729/g729_interface.h
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,154 @@
 +/*
 + *  Copyright (c) 2011 The WebRTC project authors. All Rights Reserved.
 + *
@@ -989,6 +989,7 @@ index 0000000000000000000000000000000000000000..a0825b4355bec1e865f4a8101983d697
 +#define MODULES_AUDIO_CODING_CODECS_G729_G729_INTERFACE_H_
 +
 +#include <stdint.h>
++#include <stddef.h>
 +
 +typedef void* G729EncInst;
 +typedef void* G729DecInst;
