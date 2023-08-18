@@ -144,3 +144,4 @@ fix_chromium_issue_1410394.patch
 feat_add_indirect_composition.patch
 add_g729_codec.patch
 fix_get_hyperlink_crash.patch
+fix_madvise_fail_crash.patch
