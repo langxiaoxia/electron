@@ -1510,10 +1510,10 @@ index 0000000000000000000000000000000000000000..29cbeade432d6f8f31dbef1c7e1eae02
 +#endif  // MODULES_DESKTOP_CAPTURE_WINDOW_BORDER_H_
 diff --git a/modules/desktop_capture/window_border_linux.cc b/modules/desktop_capture/window_border_linux.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35d56c7ee9
+index 0000000000000000000000000000000000000000..2bfc582418a525919b57c9f70be1ec2ef0d3f2ef
 --- /dev/null
 +++ b/modules/desktop_capture/window_border_linux.cc
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,447 @@
 +// Copyright (c) 2021 xxlang@grandstream.cn.
 +// Use of this source code is governed by the MIT license that can be
 +// found in the LICENSE file.
@@ -1722,12 +1722,12 @@ index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35
 +  border_rect_ = screen_rect;
 +  if (root_window_ == source_window_) {
 +    XMoveResizeWindow(display(), border_window_, border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height());
-+    if (mask_window_) {
-+      XMoveResizeWindow(display(), mask_window_, border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height());
-+    }
 +  } else {
 +    GetFrameExtents(display(), source_window_, &frame_extents_);
 +    XMoveResizeWindow(display(), border_window_, 0, 0, border_rect_.width(), border_rect_.height());
++    if (mask_window_) {
++      XMoveResizeWindow(display(), mask_window_, border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height());
++    }
 +  }
 +  XFlush(display());
 +}
@@ -1774,24 +1774,26 @@ index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35
 +}
 +
 +bool WindowBorderLinux::Create(const DesktopRect &window_rect, Window source_window) {
-+  // check created
++  // (1) check created.
 +  if (IsCreated()) {
 +    RTC_LOG(LS_ERROR) << "Create failed: already created";
 +    return false;
 +  }
 +
-+  // check parameter
++  // (2) check parameter.
 +  if (window_rect.is_empty()) {
 +    RTC_LOG(LS_ERROR) << "Create failed: empty rect";
 +    return false;
 +  }
 +
-+  // save border rect
++  // (3) save border rect.
 +  border_rect_ = window_rect;
 +
-+  // save source window
++  // (4) save source window.
 +  source_window_ = source_window;
 +
++  // (5) create border window.
++  // (5.a) prepare parameters for create window.
 +  if (!XMatchVisualInfo(display(), screen_num_, 32, TrueColor, &vinfo_)) {
 +    RTC_LOG(LS_ERROR) << "Create failed: no matched visual info";
 +    return false;
@@ -1801,27 +1803,32 @@ index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35
 +  attr.override_redirect = True;
 +  attr.colormap = XCreateColormap(display(), source_window_, vinfo_.visual, AllocNone);
 +  attr.border_pixel = 0;
-+  attr.background_pixel = 0;
 +  attr.event_mask = ExposureMask | StructureNotifyMask;
 +
-+  // create border window
++  int x, y;
++  unsigned long mask;
 +  if (source_window_ == root_window_) { // screen capture
-+    border_window_ = XCreateWindow(display(), source_window_,
-+        border_rect_.left(), border_rect_.top(), border_rect_.width(), border_rect_.height(), 0,
-+        vinfo_.depth, InputOutput, vinfo_.visual,
-+        CWOverrideRedirect | CWColormap | CWBorderPixel | CWBackPixel | CWEventMask, &attr);
++    x = border_rect_.left();
++    y = border_rect_.top();
++    mask = CWOverrideRedirect | CWColormap | CWBorderPixel | CWEventMask;
 +  } else { // window capture
-+    border_window_ = XCreateWindow(display(), source_window_,
-+        0, 0, border_rect_.width(), border_rect_.height(), 0, // (0, 0)
-+        vinfo_.depth, InputOutput, vinfo_.visual,
-+        CWOverrideRedirect | CWColormap | CWBorderPixel | CWEventMask, &attr); // without CWBackPixel to make border window transparent
++    x = 0;
++    y = 0;
++    mask = CWOverrideRedirect | CWColormap | CWBorderPixel | CWEventMask;
 +  }
++
++  // (5.b) create window with border_width = 0.
++  border_window_ = XCreateWindow(display(), source_window_,
++      x, y, border_rect_.width(), border_rect_.height(), 0,
++      vinfo_.depth, InputOutput, vinfo_.visual,
++      mask, &attr);
 +
 +  if (!border_window_) {
 +    RTC_LOG(LS_ERROR) << "Create failed: create window failed";
 +    return false;
 +  }
 +
++  // (5.c) show window.
 +  if (!prepare()) {
 +    Destroy();
 +    return false;
@@ -1893,34 +1900,31 @@ index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35
 +    return;
 +  }
 +
-+  if (source_window_ == root_window_) {
-+    XFixesSetWindowShapeRegion(display(), border_window_, ShapeBounding, 0, 0, 0); // default is whole
-+  } else {
-+    RTC_LOG(LS_INFO) << "set_shape_bounding: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
-+    XRectangle xrect_out;
-+    xrect_out.x = frame_extents_.left();
-+    xrect_out.y = frame_extents_.top();
-+    xrect_out.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right();
-+    xrect_out.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom();
-+    XserverRegion region_out = XFixesCreateRegion(display(), &xrect_out, 1);
++  RTC_LOG(LS_INFO) << "set_shape_bounding frame_extents: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", right=" << frame_extents_.right() << ", bottom=" << frame_extents_.bottom();
++  RTC_LOG(LS_INFO) << "set_shape_bounding border_rect: left=" << border_rect_.left() << ", top=" << border_rect_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
++  XRectangle xrect_out;
++  xrect_out.x = frame_extents_.left();
++  xrect_out.y = frame_extents_.top();
++  xrect_out.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right();
++  xrect_out.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom();
++  XserverRegion region_out = XFixesCreateRegion(display(), &xrect_out, 1);
 +
-+    XRectangle xrect_in;
-+    xrect_in.x = frame_extents_.left() + kBorderWidth;
-+    xrect_in.y = frame_extents_.top() + kBorderWidth;
-+    xrect_in.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right() - kBorderWidth * 2;
-+    xrect_in.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom() - kBorderWidth * 2;
-+    XserverRegion region_in = XFixesCreateRegion(display(), &xrect_in, 1);
++  XRectangle xrect_in;
++  xrect_in.x = frame_extents_.left() + kBorderWidth;
++  xrect_in.y = frame_extents_.top() + kBorderWidth;
++  xrect_in.width = border_rect_.width() - frame_extents_.left() - frame_extents_.right() - kBorderWidth * 2;
++  xrect_in.height = border_rect_.height() - frame_extents_.top() - frame_extents_.bottom() - kBorderWidth * 2;
++  XserverRegion region_in = XFixesCreateRegion(display(), &xrect_in, 1);
 +
-+    XserverRegion region_border = XFixesCreateRegion (display(), nullptr, 0);
-+    XFixesSubtractRegion(display(), region_border, region_out, region_in);
-+    XFixesSetWindowShapeRegion(display(), border_window_, ShapeBounding, 0, 0, region_border);
++  XserverRegion region_border = XFixesCreateRegion(display(), nullptr, 0);
++  XFixesSubtractRegion(display(), region_border, region_out, region_in);
++  XFixesSetWindowShapeRegion(display(), border_window_, ShapeBounding, 0, 0, region_border);
 +
-+    XFixesDestroyRegion(display(), region_border);
-+    XFixesDestroyRegion(display(), region_out);
-+    XFixesDestroyRegion(display(), region_in);
++  XFixesDestroyRegion(display(), region_border);
++  XFixesDestroyRegion(display(), region_out);
++  XFixesDestroyRegion(display(), region_in);
 +
-+    XRaiseWindow(display(), border_window_); // raise here to fix Teams maximize case.
-+  }
++  XRaiseWindow(display(), border_window_); // raise here to fix Teams maximize case.
 +
 +  XFlush(display());
 +}
@@ -1936,7 +1940,8 @@ index 0000000000000000000000000000000000000000..9662f9b4654de03d7ba0f8d519291f35
 +    set_shape_bounding();
 +  }
 +
-+  RTC_LOG(LS_INFO) << "draw border: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
++  RTC_LOG(LS_INFO) << "draw frame_extents: left=" << frame_extents_.left() << ", top=" << frame_extents_.top() << ", right=" << frame_extents_.right() << ", bottom=" << frame_extents_.bottom();
++  RTC_LOG(LS_INFO) << "draw border_rect: left=" << border_rect_.left() << ", top=" << border_rect_.top() << ", width=" << border_rect_.width() << ", height=" << border_rect_.height();
 +  cairo_set_operator(cairo_, CAIRO_OPERATOR_OVER); // default is over
 +  cairo_set_line_width(cairo_, kBorderWidth);
 +  cairo_set_source_rgba(cairo_, (double)kBorderColorR / 0xff, (double)kBorderColorG / 0xff, (double)kBorderColorB / 0xff, 1.0); // border is opaque
