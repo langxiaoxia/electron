@@ -21,6 +21,7 @@ const DEPOT_TOOLS = path.resolve(SOURCE_ROOT, 'third_party', 'depot_tools');
 process.env.PATH = `${process.env.PATH}${path.delimiter}${DEPOT_TOOLS}`;
 
 const IGNORELIST = new Set([
+  ['patches', 'icu', 'icu_update.patch'],
   ['shell', 'browser', 'resources', 'win', 'resource.h'],
   ['shell', 'common', 'node_includes.h'],
   ['spec-main', 'fixtures', 'pages', 'jquery-3.6.0.min.js'],
