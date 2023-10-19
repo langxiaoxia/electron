@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 19 Oct 2023 18:01:30 +0800
+Subject: feat: gum support share system audio only.
+
+GUM support share system audio only.
+
+diff --git a/content/browser/renderer_host/media/media_stream_dispatcher_host.cc b/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
+index ee132337c21422f0a984c55c376b3435d4c7765c..0bc8631c4a7f19ef26a86e9312e958258a175838 100644
+--- a/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
++++ b/content/browser/renderer_host/media/media_stream_dispatcher_host.cc
+@@ -160,7 +160,8 @@ bool AllowedStreamTypeCombination(
+              video_stream_type == blink::mojom::MediaStreamType::NO_SERVICE;
+     case blink::mojom::MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE:
+       return video_stream_type ==
+-             blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE;
++             blink::mojom::MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE ||
++             video_stream_type == blink::mojom::MediaStreamType::NO_SERVICE; //+by xxlang : support capture desktop audio only.
+     case blink::mojom::MediaStreamType::DISPLAY_AUDIO_CAPTURE:
+       return video_stream_type ==
+                  blink::mojom::MediaStreamType::DISPLAY_VIDEO_CAPTURE ||
+diff --git a/content/browser/renderer_host/media/media_stream_manager.cc b/content/browser/renderer_host/media/media_stream_manager.cc
+index 135450e1abe55bc4bbe155bd7c9a573fbd61b245..d8a20b1b8c408efd59ddd6cae56817d57b2d4286 100644
+--- a/content/browser/renderer_host/media/media_stream_manager.cc
++++ b/content/browser/renderer_host/media/media_stream_manager.cc
+@@ -2172,7 +2172,7 @@ void MediaStreamManager::SetUpRequest(const std::string& label) {
+     return;
+   }
+ 
+-  const bool is_screen_capture =
++  const bool is_screen_capture = request->audio_type() == MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE || //+by xxlang : support capture desktop audio only.
+       request->video_type() == MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE;
+   if (is_screen_capture && !SetUpScreenCaptureRequest(request)) {
+     FinalizeRequestFailed(label, request,
+@@ -2366,7 +2366,8 @@ bool MediaStreamManager::SetUpScreenCaptureRequest(DeviceRequest* request) {
+   // For screen capture we only support two valid combinations:
+   // (1) screen video capture only, or
+   // (2) screen video capture with loopback audio capture.
+-  if (request->video_type() != MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE ||
++  if ((request->video_type() != MediaStreamType::NO_SERVICE && //+by xxlang : support capture desktop audio only.
++      request->video_type() != MediaStreamType::GUM_DESKTOP_VIDEO_CAPTURE) ||
+       (request->audio_type() != MediaStreamType::NO_SERVICE &&
+        request->audio_type() != MediaStreamType::GUM_DESKTOP_AUDIO_CAPTURE)) {
+     LOG(ERROR) << "Invalid screen capture request.";

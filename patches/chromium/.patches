@@ -145,3 +145,4 @@ feat_add_indirect_composition.patch
 add_g729_codec.patch
 fix_get_hyperlink_crash.patch
 fix_madvise_fail_crash.patch
+gum_share_system_audio_only.patch
