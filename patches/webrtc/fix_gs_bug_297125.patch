@@ -1,0 +1,695 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaoxia Lang <xxlang@grandstream.cn>
+Date: Thu, 9 May 2024 19:29:58 +0800
+Subject: fix: gs bug 297125.
+
+Destroy NSWindow in main thread.
+
+diff --git a/modules/desktop_capture/window_border_mac.mm b/modules/desktop_capture/window_border_mac.mm
+index 7540d98355430a8a645169ca852b13af33f36510..a7205263883a113f95c4987e01abb7eeaba69a4e 100644
+--- a/modules/desktop_capture/window_border_mac.mm
++++ b/modules/desktop_capture/window_border_mac.mm
+@@ -13,27 +13,58 @@
+ #include "ui/gfx/mac/coordinate_conversion.h"
+ 
+ 
+-@interface BorderView : NSView {
++@interface BorderWindow : NSWindow {
++}
++@end
+ 
++@implementation BorderWindow
++
++- (instancetype)initWithContentRect:(NSRect)contentRect
++                          styleMask:(NSUInteger)windowStyle
++                            backing:(NSBackingStoreType)bufferingType
++                              defer:(BOOL)deferCreation {
++#if __has_feature(objc_arc)
++  RTC_LOG(LS_INFO) << "[ARC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderWindow initWithContentRect contentRect=(" << contentRect.origin.x << ", " << contentRect.origin.y << ") " << contentRect.size.width << "x" << contentRect.size.height;
++#else
++  RTC_LOG(LS_INFO) << "[MRC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderWindow initWithContentRect contentRect=(" << contentRect.origin.x << ", " << contentRect.origin.y << ") " << contentRect.size.width << "x" << contentRect.size.height;
++#endif
++  self = [super initWithContentRect:contentRect
++                          styleMask:windowStyle
++                            backing:bufferingType
++                              defer:deferCreation];
++  return self;
+ }
+ 
+-- (id)initWithFrame:(NSRect)frameRect;
+-- (void) drawRect: (NSRect)rect;
++- (void)dealloc {
++#if __has_feature(objc_arc)
++  RTC_LOG(LS_INFO) << "[ARC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderWindow dealloc";
++#else
++  RTC_LOG(LS_INFO) << "[MRC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderWindow dealloc";
++  [super dealloc];
++#endif
++}
+ 
+ @end
+ 
++
++@interface BorderView : NSView {
++}
++@end
++
+ @implementation BorderView
+ 
+ - (id)initWithFrame:(NSRect)frameRect {
+-  RTC_LOG(LS_INFO) << "BorderView initWithFrame frameRect=(" << frameRect.origin.x << ", " << frameRect.origin.y << ") " << frameRect.size.width << "x" << frameRect.size.height;
++#if __has_feature(objc_arc)
++  RTC_LOG(LS_INFO) << "[ARC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderView initWithFrame frameRect=(" << frameRect.origin.x << ", " << frameRect.origin.y << ") " << frameRect.size.width << "x" << frameRect.size.height;
++#else
++  RTC_LOG(LS_INFO) << "[MRC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderView initWithFrame frameRect=(" << frameRect.origin.x << ", " << frameRect.origin.y << ") " << frameRect.size.width << "x" << frameRect.size.height;
++#endif
+   self = [super initWithFrame:frameRect];
+   return self;
+ }
+ 
+ - (void)drawRect:(NSRect)dirtyRect {
+-//  RTC_LOG(LS_INFO) << "BorderView drawRect dirtyRect=(" << dirtyRect.origin.x << ", " << dirtyRect.origin.y << ") " << dirtyRect.size.width << "x" << dirtyRect.size.height;
+   NSRect borderRect = NSInsetRect(self.frame, (CGFloat)webrtc::WindowBorder::kBorderWidth / 2, (CGFloat)webrtc::WindowBorder::kBorderWidth / 2);
+-//  RTC_LOG(LS_INFO) << "BorderView drawRect borderRect=(" << borderRect.origin.x << ", " << borderRect.origin.y << ") " << borderRect.size.width << "x" << borderRect.size.height;
+   [NSBezierPath setDefaultLineWidth:(CGFloat)webrtc::WindowBorder::kBorderWidth];
+   NSBezierPath *path = [NSBezierPath bezierPathWithRect:borderRect];
+   [[NSColor colorWithSRGBRed:(CGFloat)webrtc::WindowBorder::kBorderColorR / 0xff
+@@ -43,6 +74,15 @@ - (void)drawRect:(NSRect)dirtyRect {
+   [path stroke];
+ }
+ 
++- (void)dealloc {
++#if __has_feature(objc_arc)
++  RTC_LOG(LS_INFO) << "[ARC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderView dealloc";
++#else
++  RTC_LOG(LS_INFO) << "[MRC-" << ([NSThread isMainThread] ? "MainThead":"ChildThread") << "] BorderView dealloc";
++  [super dealloc];
++#endif
++}
++
+ @end
+ 
+ 
+@@ -50,6 +90,24 @@ - (void)drawRect:(NSRect)dirtyRect {
+ 
+ namespace {
+ 
++#define RETAIN_COUNT(x) (((x) == nil) ? 0 : CFGetRetainCount((__bridge CFTypeRef)(x)))
++
++const char* GetCurrentThreadName() {
++  static thread_local const char* thread_name;
++  if (!thread_name) {
++    constexpr size_t kBufferLen = 64;
++    char name[kBufferLen];
++    char fullname[kBufferLen + 32];
++    int err = pthread_getname_np(pthread_self(), name, kBufferLen);
++    if (err != 0 || *name == '\0') {
++      snprintf(name, sizeof(name), "Thread");
++    }
++    snprintf(fullname, sizeof(fullname), "[%s #%d]", name, rtc::CurrentThreadId());
++    thread_name = strdup(fullname);
++  }
++  return thread_name;
++}
++
+ // Returns true if the window exists.
+ bool IsWindowValid(CGWindowID id) {
+   CFArrayRef window_id_array =
+@@ -65,13 +123,13 @@ bool IsWindowValid(CGWindowID id) {
+ 
+ class WindowBorderMac : public WindowBorder {
+  public:
+-  explicit WindowBorderMac() = default;
++  explicit WindowBorderMac();
+   ~WindowBorderMac() override;
+   WindowBorderMac(const WindowBorderMac&) = delete;
+   WindowBorderMac& operator=(const WindowBorderMac&) = delete;
+ 
+-  bool CreateForWindow(DesktopCapturer::SourceId source_id) override;
+-  bool CreateForScreen(const DesktopRect &window_rect) override;
++  bool CreateForWindow(DesktopCapturer::SourceId source_id) override; // create border for window share.
++  bool CreateForScreen(const DesktopRect &window_rect) override; // create border for screen share.
+   bool IsCreated() override;
+   void Destroy() override;
+   WindowId GetBorderId() override;
+@@ -79,65 +137,87 @@ bool IsWindowValid(CGWindowID id) {
+   void OnScreenRectChanged(const DesktopRect &screen_rect) override;
+ 
+  private:
+-  bool Create(const DesktopRect &window_rect, CGWindowID source_id);
+-  void SetTimer();
+-  void DestroyInternal(bool sync);
++  bool CreateInMainThread(const DesktopRect &window_rect, CGWindowID source_id);
++  void SetTimerInMainThread(); // only create timer for window share.
++  void DestroyInternal(const std::string& tag);
++
++  static void HandleTimerInMainThread(NSWindow* border_window, CGWindowID source_id, CGWindowID mask_id);
++  static void DestroyInMainThread(dispatch_source_t window_timer, NSWindow* border_window);
++  static void HandleScreenChangeInMainThread(NSWindow* border_window, const DesktopRect &screen_rect);
+ 
+-  __strong NSWindow *border_window_ = nil;
++  BorderWindow *border_window_ = nil;
+   CGWindowID source_id_ = kCGNullWindowID;
+   CGWindowID mask_id_ = kCGNullWindowID;
+-  __strong NSWindow *mask_window_ = nil;
+-  __strong dispatch_source_t window_timer_ = nil;
++  dispatch_source_t window_timer_ = nil;
+ };
+ 
++WindowBorderMac::WindowBorderMac() {
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "WindowBorderMac(" << this << ")";
++}
++
+ WindowBorderMac::~WindowBorderMac() {
+-  DestroyInternal(false);
++  DestroyInternal("~WindowBorderMac");
+ }
+ 
+ bool WindowBorderMac::CreateForWindow(DesktopCapturer::SourceId source_id) {
+-  RTC_LOG(LS_INFO) << "CreateForWindow(" << this << "): Thread=" << rtc::CurrentThreadId();
+-  // must create window in main thread
+-  dispatch_semaphore_t border_created = dispatch_semaphore_create(0);
+-  dispatch_async(dispatch_get_main_queue(), ^(void) {
+-    DesktopRect window_rect = GetWindowBounds(source_id);
+-    if (Create(window_rect, source_id)) {
+-      SetTimer();
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "CreateForWindow(" << this << ") enter";
++  __block bool ret = false;
++  const DesktopRect window_rect = GetWindowBounds(source_id);
++
++  // must create window in main thread.
++  if ([NSThread isMainThread]) {
++    if (CreateInMainThread(window_rect, source_id)) {
++      SetTimerInMainThread();
++      ret = true;
+     }
+-    dispatch_semaphore_signal(border_created);
+-  });
+-  dispatch_semaphore_wait(border_created, DISPATCH_TIME_FOREVER);
+-  border_created = nil; // ARC
+-  RTC_LOG(LS_INFO) << "CreateForWindow(" << this << ") completed";
+-  return true;
++  } else {
++    dispatch_sync(dispatch_get_main_queue(), ^(void) {
++      RTC_LOG(LS_INFO) << "Create dispatched";
++      if (CreateInMainThread(window_rect, source_id)) {
++        SetTimerInMainThread();
++        ret = true;
++      }
++    });
++  }
++
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "CreateForWindow(" << this << ") exit";
++  return ret;
+ }
+ 
+ bool WindowBorderMac::CreateForScreen(const DesktopRect &window_rect) {
+-  RTC_LOG(LS_INFO) << "CreateForScreen(" << this << "): Thread=" << rtc::CurrentThreadId();
+-  // must create window in main thread
+-  dispatch_semaphore_t border_created = dispatch_semaphore_create(0);
+-  dispatch_async(dispatch_get_main_queue(), ^(void) {
+-    Create(window_rect, kCGNullWindowID);
+-    dispatch_semaphore_signal(border_created);
+-  });
+-  dispatch_semaphore_wait(border_created, DISPATCH_TIME_FOREVER);
+-  border_created = nil; // ARC
+-  RTC_LOG(LS_INFO) << "CreateForScreen(" << this << ") completed";
+-  return true;
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "CreateForScreen(" << this << ") enter";
++  __block bool ret = false;
++
++  // must create window in main thread.
++  if ([NSThread isMainThread]) {
++    ret = CreateInMainThread(window_rect, kCGNullWindowID);
++  } else {
++    dispatch_sync(dispatch_get_main_queue(), ^(void) {
++      RTC_LOG(LS_INFO) << "Create dispatched";
++      ret = CreateInMainThread(window_rect, kCGNullWindowID);
++    });
++  }
++
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "CreateForScreen(" << this << ") exit";
++  return ret;
+ }
+ 
+ bool WindowBorderMac::IsCreated() {
+   if (border_window_ != nil) {
++    RTC_LOG(LS_VERBOSE) << GetCurrentThreadName() << "IsCreated(" << this << "): yes";
+     return true;
+   } else {
++    RTC_LOG(LS_VERBOSE) << GetCurrentThreadName() << "IsCreated(" << this << "): no";
+     return false;
+   }
+ }
+ 
+ void WindowBorderMac::Destroy() {
+-  DestroyInternal(true);
++  DestroyInternal("Destroy");
+ }
+ 
+ WindowId WindowBorderMac::GetBorderId() {
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "GetBorderId(" << this << ")";
+   if (border_window_ != nil) {
+     return [border_window_ windowNumber];
+   } else {
+@@ -146,19 +226,19 @@ bool IsWindowValid(CGWindowID id) {
+ }
+ 
+ void WindowBorderMac::SetMaskId(WindowId mask_id) {
+-  if (!IsWindowValid(mask_id)) {
+-    RTC_LOG(LS_ERROR) << "SetMaskId invalid window: mask_id=" << mask_id;
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "SetMaskId(" << this << ")";
++  if (IsCreated()) {
++    RTC_LOG(LS_ERROR) << "SetMaskId must be called before create window on macOS";
+     return;
+   }
+ 
+-  mask_window_ = [NSApp windowWithWindowNumber: mask_id];
+-  if (nil == mask_window_) {
++  if (!IsWindowValid(mask_id)) {
+     RTC_LOG(LS_ERROR) << "SetMaskId invalid window: mask_id=" << mask_id;
+     return;
+   }
+ 
+   mask_id_ = mask_id;
+-  RTC_LOG(LS_INFO) << "SetMaskId: mask_id=" << mask_id_ << ", mask_window=" << mask_window_;
++  RTC_LOG(LS_INFO) << "SetMaskId: mask_id=" << mask_id_;
+ }
+ 
+ void WindowBorderMac::OnScreenRectChanged(const DesktopRect &screen_rect) {
+@@ -166,31 +246,32 @@ bool IsWindowValid(CGWindowID id) {
+     return;
+   }
+ 
+-  dispatch_semaphore_t border_changed = dispatch_semaphore_create(0);
+-  dispatch_async(dispatch_get_main_queue(), ^(void) {
+-    NSRect border_nsrect =  [border_window_ frame];
+-    gfx::Rect screen_gfxrect(screen_rect.left(), screen_rect.top(), screen_rect.width(), screen_rect.height());
+-    NSRect screen_nsrect = gfx::ScreenRectToNSRect(screen_gfxrect);
+-    if (!NSEqualRects(screen_nsrect, border_nsrect)) {
+-      [border_window_ setFrame:screen_nsrect display:YES];
+-    }
+-    dispatch_semaphore_signal(border_changed);
+-  });
+-  dispatch_semaphore_wait(border_changed, DISPATCH_TIME_FOREVER);
+-  border_changed = nil; // ARC
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "OnScreenRectChanged(" << this << ") enter";
++  // must change window in main thread.
++  if ([NSThread isMainThread]) {
++    HandleScreenChangeInMainThread(border_window_, screen_rect);
++  } else {
++    __weak NSWindow* border_window = border_window_; // We can use __weak if cancel timer in main thread.
++    dispatch_sync(dispatch_get_main_queue(), ^(void) {
++      RTC_LOG(LS_INFO) << "Change dispatched";
++      HandleScreenChangeInMainThread(border_window, screen_rect);
++    });
++  }
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "OnScreenRectChanged(" << this << ") exit";
+ }
+ 
+-bool WindowBorderMac::Create(const DesktopRect &window_rect, CGWindowID source_id) {
+-  RTC_LOG(LS_INFO) << "Create(" << this << "): Thread=" << rtc::CurrentThreadId();
++bool WindowBorderMac::CreateInMainThread(const DesktopRect &window_rect, CGWindowID source_id) {
++  DCHECK([NSThread isMainThread]);
++
+   // check created
+   if (IsCreated()) {
+-    RTC_LOG(LS_ERROR) << "Create failed: already created";
++    RTC_LOG(LS_ERROR) << "Create border window failed: already created";
+     return false;
+   }
+ 
+   // check parameter
+   if (window_rect.is_empty()) {
+-    RTC_LOG(LS_ERROR) << "Create failed: empty rect";
++    RTC_LOG(LS_ERROR) << "Create border window failed: empty rect";
+     return false;
+   }
+ 
+@@ -216,16 +297,18 @@ bool IsWindowValid(CGWindowID id) {
+ 
+   // create border window
+   border_window_ =
+-      [[NSWindow alloc] initWithContentRect:content_rect
++      [[BorderWindow alloc] initWithContentRect:content_rect
+                                 styleMask:NSWindowStyleMaskBorderless
+                                   backing:NSBackingStoreBuffered
+                                     defer:NO];
+   if (nil == border_window_) {
+     RTC_LOG(LS_ERROR) << "Create border window failed";
+-    Destroy();
++    DestroyInternal("CreateInMainThread");
+     return false;
+   }
++  RTC_LOG(LS_INFO) << "Create border window OK: border_ref=" << RETAIN_COUNT(border_window_);
+ 
++  // set window
+   [border_window_ setReleasedWhenClosed:NO];
+   [border_window_ setHasShadow:NO];
+   [border_window_ setOpaque:NO];
+@@ -236,158 +319,213 @@ bool IsWindowValid(CGWindowID id) {
+   [border_window_ setSharingType:NSWindowSharingNone];
+   [border_window_ setCollectionBehavior:[border_window_ collectionBehavior] | NSWindowCollectionBehaviorTransient];
+ 
++  // get window
+   NSInteger border_id = [border_window_ windowNumber];
+   NSInteger border_order = [border_window_ orderedIndex];
+   NSRect frame_rect =  [border_window_ frame];
+-  RTC_LOG(LS_INFO) << "Create border window OK: window=" << border_window_ <<
+-                      ", id=" << border_id <<
++  RTC_LOG(LS_INFO) << "border_id=" << border_id <<
+                       ", order=" << border_order <<
+                       ", frame=(" << frame_rect.origin.x << ", " << frame_rect.origin.y << ") " << frame_rect.size.width << "x" << frame_rect.size.height;
+ 
++  // create border view
+   BorderView *borderView =
+       [[BorderView alloc] initWithFrame:content_rect];
+   if (nil == borderView) {
+     RTC_LOG(LS_ERROR) << "Create border view failed";
+-    Destroy();
++    DestroyInternal("CreateInMainThread");
+     return false;
+   }
++  RTC_LOG(LS_INFO) << "Create border view OK: view_ref=" << RETAIN_COUNT(borderView);
+ 
++  // set content view which will draw the red frame
+   [border_window_ setContentView:borderView];
+   return true;
+ }
+ 
+-void WindowBorderMac::SetTimer() {
++void WindowBorderMac::SetTimerInMainThread() {
++  DCHECK([NSThread isMainThread]);
++
++  // (1) create timer
+   window_timer_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "SetTimer(" << this << ") enter: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
+ 
+-  // set interval 15ms
+-  uint64_t intervalInNanoSecs = (uint64_t)(15 * USEC_PER_SEC);
++  // (2) set timer interval
++  uint64_t intervalInNanoSecs = (uint64_t)(15 * USEC_PER_SEC); // 15ms
+   uint64_t leewayInNanoSecs = (uint64_t)(0 * NSEC_PER_SEC);
+   dispatch_source_set_timer(window_timer_, DISPATCH_TIME_NOW, intervalInNanoSecs, leewayInNanoSecs);
+ 
+-  // set event handler
+-  dispatch_source_set_event_handler(window_timer_, ^{
+-    WindowBorderMac *pThis = (WindowBorderMac *)dispatch_get_context(window_timer_);
+-    if (!IsWindowValid(source_id_)) {
+-      RTC_LOG(LS_ERROR) << "Timer Event Handler(" << pThis << "): source window is invalid";
+-      return;
+-    }
++  __weak dispatch_source_t window_timer = window_timer_;
++  __weak NSWindow* border_window = border_window_;
++  __block CGWindowID source_id = source_id_;
++  __block CGWindowID mask_id = mask_id_;
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "SetTimer(" << this << ") blocked: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
+ 
+-    if (nil == border_window_) {
+-      RTC_LOG(LS_ERROR) << "Timer Event Handler(" << pThis << "): border window is invalid";
+-      return;
+-    }
++  // (3) set timer event handler
++  dispatch_source_set_event_handler(window_timer, ^{
++    RTC_LOG(LS_VERBOSE) << GetCurrentThreadName() << "Timer Event Handler(" << [border_window windowNumber] << "): timer_ref=" << RETAIN_COUNT(window_timer) << ", border_ref=" << RETAIN_COUNT(border_window);
++    HandleTimerInMainThread(border_window, source_id, mask_id);
++  });
+ 
+-    // hide window.
+-    if (!IsWindowOnScreen(source_id_)) {
+-      if (IsWindowOnScreen(GetBorderId())) {
+-        RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): border show => hide";
+-        [border_window_ orderOut:nil];
+-      }
+-      if (IsWindowValid(mask_id_) && IsWindowOnScreen(mask_id_)) {
+-        RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): mask show => hide";
+-        [mask_window_ orderOut:nil];
+-      }
+-      return;
+-    }
++  // (4) set timer cancel handler
++  dispatch_source_set_cancel_handler(window_timer, ^{
++    RTC_LOG(LS_INFO) << GetCurrentThreadName() << "Timer Cancel Handler(" << [border_window windowNumber] << "): timer_ref=" << RETAIN_COUNT(window_timer) << ", border_ref=" << RETAIN_COUNT(border_window);
++  });
+ 
+-    if (!IsWindowOnScreen(GetBorderId())) {
+-      RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): border hide => show";
+-    }
++  // (5) start timer
++  dispatch_resume(window_timer_);
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << "SetTimer(" << this << ") exit: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
++}
+ 
+-    if (IsWindowValid(mask_id_) && !IsWindowOnScreen(mask_id_)) {
+-      RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): mask hide => show";
+-    }
++void WindowBorderMac::DestroyInternal(const std::string& tag) {
++  if (!IsCreated()) {
++    return;
++  }
+ 
+-    // window level.
+-    NSWindowLevel source_level = GetWindowLevel(source_id_);
+-    NSWindowLevel border_level = [border_window_ level];
+-    if (border_level != source_level) {
+-      RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): border level " << border_level << " => " << source_level;
+-      [border_window_ setLevel:source_level];
+-    }
+-    if (IsWindowValid(mask_id_)) {
+-      NSWindowLevel mask_level = [mask_window_ level];
+-      if (mask_level != source_level) {
+-        RTC_LOG(LS_INFO) << "Timer Event Handler(" << pThis << "): mask level " << mask_level << " => " << source_level;
+-        [mask_window_ setLevel:source_level];
+-      }
+-    }
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << tag << "(" << this << ") enter: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
++  // must destroy window in main thread.
++  if ([NSThread isMainThread]) {
++    DestroyInMainThread(window_timer_, border_window_);
++  } else {
++    __block dispatch_source_t window_timer = window_timer_; // hold timer cancel it.
++    __block NSWindow* border_window = border_window_; // hold window until close it.
++    RTC_LOG(LS_INFO) << GetCurrentThreadName() << tag << "(" << this << ") blocked: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
++    dispatch_async(dispatch_get_main_queue(), ^(void) {
++      RTC_LOG(LS_INFO) << "Destroy dispatched: timer_ref=" << RETAIN_COUNT(window_timer) << ", border_ref=" << RETAIN_COUNT(border_window);
++      DestroyInMainThread(window_timer, border_window);
++      RTC_LOG(LS_INFO) << "Destroy completed: timer_ref=" << RETAIN_COUNT(window_timer) << ", border_ref=" << RETAIN_COUNT(border_window);
++    });
++  }
++  RTC_LOG(LS_INFO) << GetCurrentThreadName() << tag << "(" << this << ") exit: timer_ref=" << RETAIN_COUNT(window_timer_) << ", border_ref=" << RETAIN_COUNT(border_window_);
++  window_timer_ = nil;
++  border_window_ = nil;
++  source_id_ = kCGNullWindowID;
++  mask_id_ = kCGNullWindowID;
++}
++
++void WindowBorderMac::HandleTimerInMainThread(NSWindow* border_window, CGWindowID source_id, CGWindowID mask_id) {
++  DCHECK([NSThread isMainThread]);
++
++  if (nil == border_window) {
++    RTC_LOG(LS_ERROR) << "Timer Event Handler: border window is invalid";
++    return;
++  }
+ 
+-    // window order : put border above source.
+-    NSInteger border_order_old = [border_window_ orderedIndex];
+-    [border_window_ orderWindow:NSWindowAbove relativeTo:source_id_];
+-    NSInteger border_order_new = [border_window_ orderedIndex];
+-    if (border_order_old != border_order_new) {
+-     RTC_LOG(LS_VERBOSE) << "Timer Event Handler(" << pThis << "): border order " << border_order_old << " => " << border_order_new;
++  if (!IsWindowValid(source_id)) {
++    RTC_LOG(LS_ERROR) << "Timer Event Handler: source window is invalid";
++    return;
++  }
++
++  NSInteger border_id = [border_window windowNumber];
++
++  NSWindow *mask_window = nil;
++  if (IsWindowValid(mask_id)) {
++    mask_window = [NSApp windowWithWindowNumber: mask_id];
++  }
++
++  // hide window.
++  if (!IsWindowOnScreen(source_id)) {
++    if (IsWindowOnScreen(border_id)) {
++      RTC_LOG(LS_INFO) << "Timer Event Handler: border show => hide";
++      [border_window orderOut:nil];
+     }
+-    // window order : put mask above border.
+-    if (IsWindowValid(mask_id_)) {
+-      NSInteger mask_order_old = [mask_window_ orderedIndex];
+-      [mask_window_ orderWindow:NSWindowAbove relativeTo:GetBorderId()];
+-      NSInteger mask_order_new = [mask_window_ orderedIndex];
+-      if (mask_order_old != mask_order_new) {
+-       RTC_LOG(LS_VERBOSE) << "Timer Event Handler(" << pThis << "): mask order " << mask_order_old << " => " << mask_order_new;
+-      }
++    if (IsWindowValid(mask_id) && IsWindowOnScreen(mask_id)) {
++      RTC_LOG(LS_INFO) << "Timer Event Handler: mask show => hide";
++      [mask_window orderOut:nil];
+     }
++    return;
++  }
++
++  if (!IsWindowOnScreen(border_id)) {
++    RTC_LOG(LS_INFO) << "Timer Event Handler: border hide => show";
++  }
+ 
+-    // move or resize window.
+-    DesktopRect source_rect = GetWindowBounds(source_id_);
+-    gfx::Rect source_gfxrect(source_rect.left(), source_rect.top(), source_rect.width(), source_rect.height());
+-    NSRect source_nsrect = gfx::ScreenRectToNSRect(source_gfxrect);
+-    NSRect border_nsrect = [border_window_ frame];
+-    if (!NSEqualRects(source_nsrect, border_nsrect)) {
+-      [border_window_ setFrame:source_nsrect display:YES];
++  if (IsWindowValid(mask_id) && !IsWindowOnScreen(mask_id)) {
++    RTC_LOG(LS_INFO) << "Timer Event Handler: mask hide => show";
++  }
++
++  // window level.
++  NSWindowLevel source_level = GetWindowLevel(source_id);
++  NSWindowLevel border_level = [border_window level];
++  if (border_level != source_level) {
++    RTC_LOG(LS_INFO) << "Timer Event Handler: border level " << border_level << " => " << source_level;
++    [border_window setLevel:source_level];
++  }
++  if (IsWindowValid(mask_id)) {
++    NSWindowLevel mask_level = [mask_window level];
++    if (mask_level != source_level) {
++      RTC_LOG(LS_INFO) << "Timer Event Handler: mask level " << mask_level << " => " << source_level;
++      [mask_window setLevel:source_level];
+     }
+-    if (IsWindowValid(mask_id_)) {
+-      NSRect mask_nsrect = [mask_window_ frame];
+-      if (!NSEqualRects(source_nsrect, mask_nsrect)) {
+-        [mask_window_ setFrame:source_nsrect display:YES];
+-      }
++  }
++
++  // window order : put border above source.
++  NSInteger border_order_old = [border_window orderedIndex];
++  [border_window orderWindow:NSWindowAbove relativeTo:source_id];
++  NSInteger border_order_new = [border_window orderedIndex];
++  if (border_order_old != border_order_new) {
++    RTC_LOG(LS_VERBOSE) << "Timer Event Handler: border order " << border_order_old << " => " << border_order_new;
++  }
++  // window order : put mask above border.
++  if (IsWindowValid(mask_id)) {
++    NSInteger mask_order_old = [mask_window orderedIndex];
++    [mask_window orderWindow:NSWindowAbove relativeTo:border_id];
++    NSInteger mask_order_new = [mask_window orderedIndex];
++    if (mask_order_old != mask_order_new) {
++      RTC_LOG(LS_VERBOSE) << "Timer Event Handler: mask order " << mask_order_old << " => " << mask_order_new;
+     }
+-  });
++  }
+ 
+-  dispatch_resume(window_timer_);
++  // move or resize window.
++  DesktopRect source_rect = GetWindowBounds(source_id);
++  gfx::Rect source_gfxrect(source_rect.left(), source_rect.top(), source_rect.width(), source_rect.height());
++  NSRect source_nsrect = gfx::ScreenRectToNSRect(source_gfxrect);
++  NSRect border_nsrect = [border_window frame];
++  if (!NSEqualRects(source_nsrect, border_nsrect)) {
++    [border_window setFrame:source_nsrect display:YES];
++  }
++  if (IsWindowValid(mask_id)) {
++    NSRect mask_nsrect = [mask_window frame];
++    if (!NSEqualRects(source_nsrect, mask_nsrect)) {
++      [mask_window setFrame:source_nsrect display:YES];
++    }
++  }
+ }
+ 
+-void WindowBorderMac::DestroyInternal(bool sync) {
+-  if (window_timer_ != nil) {
+-    if (sync) {
+-      RTC_LOG(LS_INFO) << "Sync Cancel Timer(" << this << "): Thread=" << rtc::CurrentThreadId();
+-      dispatch_semaphore_t timer_cancelled = dispatch_semaphore_create(0);
+-      dispatch_source_set_cancel_handler(window_timer_, ^{
+-        RTC_LOG(LS_INFO) << "Sync Timer Cancel Handler: Thread=" << rtc::CurrentThreadId() << ", window_timer=" << window_timer_;
+-        if (window_timer_) {
+-          dispatch_semaphore_signal(timer_cancelled);
+-        }
+-      });
+-      dispatch_source_cancel(window_timer_);
+-      dispatch_semaphore_wait(timer_cancelled, DISPATCH_TIME_FOREVER);
+-      timer_cancelled = nil; // ARC
+-    } else {
+-      RTC_LOG(LS_INFO) << "Async Cancel Timer(" << this << "): Thread=" << rtc::CurrentThreadId();
+-      dispatch_source_set_cancel_handler(window_timer_, ^{
+-        RTC_LOG(LS_INFO) << "Async Timer Cancel Handler: Thread=" << rtc::CurrentThreadId() << ", window_timer=" << window_timer_;
+-      });
+-      dispatch_source_cancel(window_timer_);
+-    }
++void WindowBorderMac::DestroyInMainThread(dispatch_source_t window_timer, NSWindow* border_window) {
++  DCHECK([NSThread isMainThread]);
+ 
+-    window_timer_ = nil; // ARC
++  if (window_timer != nil) {
++    RTC_LOG(LS_INFO) << "Cancel Timer";
++    dispatch_source_cancel(window_timer); // async
+     RTC_LOG(LS_INFO) << "Timer cancelled";
++  } else {
++    RTC_LOG(LS_INFO) << "Timer not created";
+   }
+ 
+-  mask_id_ = kCGNullWindowID;
+-  if (mask_window_ != nil) {
+-    mask_window_ = nil;
++  if (border_window != nil) {
++    RTC_LOG(LS_INFO) << "Close border";
++    [border_window close];
++    RTC_LOG(LS_INFO) << "Border closed";
++  } else {
++    RTC_LOG(LS_INFO) << "Border not created";
+   }
++}
+ 
+-  if (border_window_ != nil) {
+-    RTC_LOG(LS_INFO) << "Close border: border_window=" << border_window_;
+-    [border_window_ close];
+-    border_window_ = nil; // ARC
+-    RTC_LOG(LS_INFO) << "Border closed";
++void WindowBorderMac::HandleScreenChangeInMainThread(NSWindow* border_window, const DesktopRect &screen_rect) {
++  DCHECK([NSThread isMainThread]);
++
++  if (border_window == nil) {
++    RTC_LOG(LS_ERROR) << "Screen Change Handler: border window is invalid";
++    return;
+   }
+ 
+-  source_id_ = kCGNullWindowID;
++  // move or resize window.
++  NSRect border_nsrect =  [border_window frame];
++  gfx::Rect screen_gfxrect(screen_rect.left(), screen_rect.top(), screen_rect.width(), screen_rect.height());
++  NSRect screen_nsrect = gfx::ScreenRectToNSRect(screen_gfxrect);
++  if (!NSEqualRects(screen_nsrect, border_nsrect)) {
++    [border_window setFrame:screen_nsrect display:YES];
++  }
+ }
+ 
+ }  // namespace
+diff --git a/modules/desktop_capture/window_capturer_mac.mm b/modules/desktop_capture/window_capturer_mac.mm
+index 1df31953ea13e20ca7a9820de13a4ac4d9e14893..54dc81ac9d38006435d11c4256852cf2eaff0aa6 100644
+--- a/modules/desktop_capture/window_capturer_mac.mm
++++ b/modules/desktop_capture/window_capturer_mac.mm
+@@ -197,13 +197,15 @@ explicit WindowCapturerMac(
+       first_capture_ = false;
+     } else {
+       RTC_LOG(LS_INFO) << "WindowCapturerMac create border for window " << window_id_ << " with mask " << mask_id_;
++      if (IsWindowValid(mask_id_)) {
++        window_border_->SetMaskId(mask_id_);
++        window_finder_.transparent_windows_.push_back(mask_id_);
++      }
+       window_border_->CreateForWindow(window_id_);
+       if (window_border_->IsCreated()) {
+         window_finder_.transparent_windows_.push_back(window_border_->GetBorderId());
+-        if (IsWindowValid(mask_id_)) {
+-          window_border_->SetMaskId(mask_id_);
+-          window_finder_.transparent_windows_.push_back(mask_id_);
+-        }
++      } else {
++        window_finder_.transparent_windows_.clear();
+       }
+     }
+   }

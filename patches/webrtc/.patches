@@ -10,3 +10,4 @@ fix_gs_bug_242868.patch
 fix_webrtc_bug_14265.patch
 add_g729_codec.patch
 fix_gs_bug_267516.patch
+fix_gs_bug_297125.patch
